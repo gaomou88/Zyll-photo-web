@@ -54,7 +54,7 @@
         <datalist id="album-list">{#each albums as a}<option value={a}></option>{/each}</datalist>
       </label>
       {#if target}
-        <p class="muted">{target.uploadEncrypted ? "这个账号开着端到端加密：照片在浏览器里加密后再上传。" : "这个账号没开端到端加密：照片按原样上传。"}</p>
+        <p class="muted">{target.uploadEncrypted ? "这个账号开着端到端加密：照片在浏览器里加密后再上传。" : "这个账号没开端到端加密：照片按原样上传。想加密，请先在手机 Zyll 里给这个网盘开启加密。"}</p>
       {/if}
     {/if}
     {#if note}<p class="error">{note}</p>{/if}

@@ -44,6 +44,18 @@ export const deviceId: string = (() => {
 /** 解锁后的包裹密钥：vaultId → K_wrap（不可导出，只在内存里）。 */
 const keyring = new Map<string, CryptoKey>();
 
+/** 出错时带上是哪一步（方便用户截图反馈）；需要解锁、需要登录的照原样抛出。 */
+async function step<T>(label: string, job: () => Promise<T>): Promise<T> {
+  try {
+    return await job();
+  } catch (e) {
+    if (e instanceof Locked || e instanceof NeedsSignIn) throw e;
+    const err = new Error(`${label}失败：${(e as Error).message || e}`);
+    err.cause = e;
+    throw err;
+  }
+}
+
 /** 存放位置根目录的 storage.json（spec/sharing.md 第 7 节）。 */
 async function readMarker(d: Drive): Promise<{ state: string; to: string } | null> {
   const id = await d.findFile(["storage.json"]);
@@ -134,7 +146,13 @@ export class Account {
   get uploadEncrypted(): boolean {
     const m = this.merged;
     if (m?.mode) return m.mode.enc;
-    return !!this.encId || this.items.some((i) => i.e);
+    // 网盘里有密钥包（开过加密）也按加密传，宁可多加密，不把照片明文传上去
+    return !!this.encId || this.items.some((i) => i.e) || !!this.bundleJson;
+  }
+
+  /** 操作中途登录过期：切到“需要重新连接”状态，界面会显示提示条。 */
+  noteError(e: unknown) {
+    if (e instanceof NeedsSignIn) this.state = "signin";
   }
 
   private get seqKey() {
@@ -155,10 +173,10 @@ export class Account {
     this.error = "";
     try {
       await this.lock(async () => {
-        if (this.drive instanceof GoogleDrive) await this.resolveGoogleRoot();
-        const id = await this.drive.findFile(KEYBUNDLE_PATH);
-        this.bundleJson = id ? text.decode(await this.drive.download(id)) : null;
-        const p = await this.pull();
+        if (this.drive instanceof GoogleDrive) await step("查找存放位置", () => this.resolveGoogleRoot());
+        const id = await step("查找密钥包", () => this.drive.findFile(KEYBUNDLE_PATH));
+        this.bundleJson = id ? await step("读取密钥包", async () => text.decode(await this.drive.download(id))) : null;
+        const p = await step("读取备份目录", () => this.pull());
         this.apply(p);
       });
       this.state = "ready";

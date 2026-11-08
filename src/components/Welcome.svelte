@@ -38,6 +38,7 @@
     {/if}
     {#if error}<p class="error">{error}</p>{/if}
     <p class="muted">登录在弹出的窗口里完成，请允许本网站弹出窗口。用和手机 Zyll 相同的网盘账号登录才能看到手机的备份。</p>
+    <p class="muted legal">连接即表示你同意<a href="terms.html" target="_blank" rel="noopener">使用条款</a>和<a href="privacy.html" target="_blank" rel="noopener">隐私政策</a></p>
   </div>
 </div>
 
@@ -50,6 +51,7 @@
   .logo { width: 64px; height: 64px; border-radius: 20px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
   h1 { margin: 0; font-size: 24px; font-weight: 600; }
   p { margin: 0; }
+  .legal a { color: var(--accent); }
   .buttons { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 300px; margin: 8px 0; }
   .buttons .btn { justify-content: center; padding: 11px 16px; }
 </style>

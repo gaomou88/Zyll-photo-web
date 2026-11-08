@@ -17,6 +17,8 @@
           正在上传 {uploads.done + 1} / {total}
         {:else if uploads.needsUnlock}
           需要解锁后才能继续上传
+        {:else if uploads.waiting}
+          已暂停，还有 {uploads.waiting} 个没传
         {:else}
           上传完成：{total - failed.length - skipped} 张{#if skipped}，{skipped} 张已存在{/if}{#if failed.length}，{failed.length} 张失败{/if}
         {/if}
@@ -24,6 +26,7 @@
       {#if uploads.running}
         <button class="btn text" onclick={() => uploads.cancel()}>取消</button>
       {:else}
+        {#if uploads.waiting && !uploads.needsUnlock}<button class="btn text" onclick={() => uploads.resume()}>继续上传</button>{/if}
         <button class="icon-btn" onclick={() => uploads.clear()} aria-label="关闭"><Icon name="close" size={18} /></button>
       {/if}
     </div>
@@ -44,7 +47,7 @@
   .panel {
     position: fixed; right: 16px; bottom: 16px; z-index: 30; width: min(380px, calc(100vw - 32px));
     background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow);
-    padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; animation: zy-rise 0.22s cubic-bezier(0.2, 0, 0, 1);
   }
   .head { display: flex; align-items: center; gap: 8px; }
   .grow { flex: 1; text-align: left; background: none; border: none; padding: 0; font-weight: 500; }

@@ -134,3 +134,16 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .dialog p { margin: 0; }
 .dialog .actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 label.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+
+/* ---- 动画 ---- */
+@keyframes zy-fade { from { opacity: 0; } }
+@keyframes zy-pop { from { opacity: 0; transform: translateY(8px) scale(0.97); } }
+@keyframes zy-rise { from { opacity: 0; transform: translateY(16px); } }
+.scrim { animation: zy-fade 0.16s ease-out; }
+.dialog { animation: zy-pop 0.2s cubic-bezier(0.2, 0, 0, 1); }
+.btn, .icon-btn { transition: background-color 0.15s, filter 0.15s, transform 0.1s; }
+.btn:active:not(:disabled), .icon-btn:active:not(:disabled) { transform: scale(0.96); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

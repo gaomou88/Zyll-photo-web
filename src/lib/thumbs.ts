@@ -44,7 +44,7 @@ export function thumbUrl(p: Photo): Promise<string | null> {
   job = slot(async () => {
     const { acc, item } = p;
     if (!acc.canOpen(item)) return null;
-    let blob = await acc.thumbnail(item).catch(() => null);
+    let blob = await acc.thumbnail(item).catch((e) => (acc.noteError(e), null));
     if (!blob && item.m.startsWith("image/") && item.s > 0 && item.s < 25 * 1024 * 1024) {
       const orig = await acc.original(item).catch(() => null);
       if (orig) blob = await makeThumbnail(orig, item.m, item.n);
@@ -62,4 +62,30 @@ export function thumbUrl(p: Photo): Promise<string | null> {
 export function clearThumbs() {
   for (const v of cache.values()) URL.revokeObjectURL(v);
   cache.clear();
+}
+
+// 所有缩略图共用一个 IntersectionObserver（每张图各建一个在几千张时很卡）
+const watchers = new Map<Element, () => void>();
+let io: IntersectionObserver | null = null;
+
+/** 元素快进入屏幕时调用一次 [cb]；返回取消函数。 */
+export function whenNear(el: Element, cb: () => void): () => void {
+  io ??= new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const fn = watchers.get(e.target);
+        watchers.delete(e.target);
+        io!.unobserve(e.target);
+        fn?.();
+      }
+    },
+    { rootMargin: "800px 0px" },
+  );
+  watchers.set(el, cb);
+  io.observe(el);
+  return () => {
+    watchers.delete(el);
+    io?.unobserve(el);
+  };
 }
