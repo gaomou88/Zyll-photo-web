@@ -5,8 +5,9 @@
  * - VITE_ONEDRIVE_CLIENT_ID：Microsoft Entra 里和安卓版**同一个应用注册**（同一个应用才是同一个“应用/Zyll 相册”文件夹），
  *   加一个“单页应用程序”平台，重定向 URI 填 [redirectUri]。
  */
-export const GOOGLE_CLIENT_ID: string = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
-export const ONEDRIVE_CLIENT_ID: string = import.meta.env.VITE_ONEDRIVE_CLIENT_ID ?? "";
+export const GOOGLE_CLIENT_ID: string = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+// 客户端 ID 不是机密（安卓版的也写在 zyll-gallery 的 gradle.properties 里），直接写在这里，环境变量可以覆盖
+export const ONEDRIVE_CLIENT_ID: string = import.meta.env.VITE_ONEDRIVE_CLIENT_ID || "cc8f1b98-ce09-481f-a268-078b94e6e532";
 
 /** 登录回调页：和主页面同一目录下的 auth-callback.html。 */
 export function redirectUri(): string {
