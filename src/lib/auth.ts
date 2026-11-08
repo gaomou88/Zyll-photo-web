@@ -124,8 +124,8 @@ async function googleToken(loginHint?: string, silent = false): Promise<{ token:
   u.searchParams.set("include_granted_scopes", "true");
   u.searchParams.set("state", state);
   if (loginHint) u.searchParams.set("login_hint", loginHint);
-  // 续期：已经同意过的账号直接返回，不再显示同意页
-  u.searchParams.set("prompt", silent ? "none" : "select_account");
+  // 续期：不带 prompt，已经同意过、只登录了这一个账号时会直接返回；需要时 Google 自己会让用户选账号
+  if (!silent) u.searchParams.set("prompt", "select_account");
   const p = await popup(u.toString(), state);
   const err = p.get("error");
   if (err) throw new Error(err === "access_denied" ? "没有授权，已取消" : `Google 登录失败：${err}`);

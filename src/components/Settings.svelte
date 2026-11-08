@@ -95,6 +95,7 @@
       <li>登录令牌保存在这个浏览器里，只能访问 Zyll 自己的文件夹；在公用电脑上用完请断开账号。</li>
       <li>Google 的网页登录大约一小时过期，过期后点“重新连接”即可，加密照片不需要重新解锁。</li>
     </ul>
+    <p class="muted"><a href="terms.html" target="_blank" rel="noopener">使用条款</a> · <a href="privacy.html" target="_blank" rel="noopener">隐私政策</a></p>
   </section>
 </div>
 
@@ -108,5 +109,6 @@
   .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; }
   .inline { max-width: 260px; }
+  a { color: var(--accent); }
   ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 </style>

@@ -1,3 +1,4 @@
+import { NeedsSignIn } from "./auth";
 import { Locked, type Account } from "./library.svelte";
 import { isMedia, mimeOf } from "./media";
 
@@ -74,6 +75,12 @@ class Uploads {
             this.needsUnlock = true;
             break;
           }
+          if (e instanceof NeedsSignIn) {
+            // 登录过期：停下来，重新连接后点“继续上传”
+            job.state = "waiting";
+            acc.noteError(e);
+            break;
+          }
           job.state = (e as Error).name === "AbortError" ? "waiting" : "failed";
           job.error = (e as Error).message;
         }
@@ -90,7 +97,12 @@ class Uploads {
     }
   }
 
-  /** 解锁后接着传 */
+  /** 还有没传的（取消、登录过期、需要解锁后） */
+  get waiting() {
+    return this.jobs.filter((j) => j.state === "waiting").length;
+  }
+
+  /** 解锁或重新连接后接着传 */
   resume() {
     if (!this.running && this.target && this.jobs.some((j) => j.state === "waiting")) void this.run();
   }

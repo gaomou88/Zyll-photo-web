@@ -75,7 +75,8 @@
 {/if}
 
 <style>
-  .day { margin-bottom: 18px; }
+  /* 屏幕外的日期分组不排版不绘制，几千张照片滚动也流畅 */
+  .day { margin-bottom: 18px; content-visibility: auto; contain-intrinsic-size: auto 420px; }
   h3 {
     margin: 0 0 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 8px;
   }

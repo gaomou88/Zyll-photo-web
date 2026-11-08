@@ -9,6 +9,7 @@
   import UnlockDialog from "./components/UnlockDialog.svelte";
   import UploadDialog from "./components/UploadDialog.svelte";
   import UploadPanel from "./components/UploadPanel.svelte";
+  import AppBanner from "./components/AppBanner.svelte";
   import { library, type Photo } from "./lib/library.svelte";
   import { uploads } from "./lib/uploads.svelte";
   import { downloadPhotos } from "./lib/download";
@@ -16,8 +17,38 @@
   import { clearStreams, startServiceWorker } from "./lib/stream";
 
   type View = "photos" | "albums" | "videos" | "shared" | "settings";
-  let view = $state<View>("photos");
-  let album = $state<string | null>(null);
+  const VIEWS: View[] = ["photos", "albums", "videos", "shared", "settings"];
+
+  // 当前页面记在地址的 # 后面（#/settings、#/albums/相机）：刷新、下拉刷新后还停在原来的页面，返回键也能用
+  function parseRoute(): { view: View; album: string | null } {
+    const m = /^#\/([a-z]+)(?:\/(.+))?$/.exec(location.hash);
+    const v = (m?.[1] ?? "photos") as View;
+    if (!VIEWS.includes(v)) return { view: "photos", album: null };
+    let a: string | null = null;
+    if (v === "albums" && m?.[2]) {
+      try {
+        a = decodeURIComponent(m[2]);
+      } catch {
+        a = null;
+      }
+    }
+    return { view: v, album: a };
+  }
+  const initial = parseRoute();
+  let view = $state<View>(initial.view);
+  let album = $state<string | null>(initial.album);
+  $effect(() => {
+    const want = view === "photos" ? "" : `#/${view}${view === "albums" && album !== null ? "/" + encodeURIComponent(album) : ""}`;
+    if (location.hash !== want && !(want === "" && location.hash === "")) {
+      history.pushState(null, "", location.pathname + location.search + want);
+    }
+  });
+  function onPop() {
+    const r = parseRoute();
+    view = r.view;
+    album = r.album;
+    viewerIndex = null;
+  }
   let drawer = $state(false);
   let viewerIndex = $state<number | null>(null);
   let showUnlock = $state(false);
@@ -138,7 +169,12 @@
   }
 
   // ---- 闲置自动锁 ----
-  let autoLock = $state(Number(localStorage.getItem("zyll-autolock") ?? 15));
+  let autoLock = $state(15);
+  try {
+    autoLock = Number(localStorage.getItem("zyll-autolock") ?? 15);
+  } catch {
+    /* ignore */
+  }
   $effect(() => {
     try {
       localStorage.setItem("zyll-autolock", String(autoLock));
@@ -167,7 +203,7 @@
   }
 </script>
 
-<svelte:window onpointerdown={touch} onkeydown={touch} onbeforeunload={beforeUnload} />
+<svelte:window onpointerdown={touch} onkeydown={touch} onbeforeunload={beforeUnload} onpopstate={onPop} />
 
 {#if library.accounts.length === 0}
   <Welcome />
@@ -235,6 +271,8 @@
           </div>
         {/each}
 
+        {#key view + "/" + (album ?? "")}
+        <div class="view">
         {#if view === "settings"}
           <Settings bind:autoLock onlock={lockNow} onunlock={() => (showUnlock = true)} />
         {:else if view === "shared"}
@@ -255,6 +293,8 @@
             empty={loading ? "正在读取网盘里的备份…" : view === "videos" ? "还没有视频" : "还没有照片。点右上角“上传”，或把照片拖进这个窗口。"}
           />
         {/if}
+        </div>
+        {/key}
       </div>
     </main>
 
@@ -318,6 +358,7 @@
 
 <UploadPanel />
 {#if toast}<div class="toast">{toast}</div>{/if}
+<AppBanner />
 
 <style>
   .shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
@@ -330,7 +371,7 @@
   nav { display: flex; flex-direction: column; gap: 2px; }
   nav button {
     display: flex; align-items: center; gap: 14px; padding: 10px 14px; border: none; border-radius: 999px;
-    background: none; text-align: left; font-size: 15px;
+    background: none; text-align: left; font-size: 15px; transition: background-color 0.15s, color 0.15s;
   }
   nav button:hover { background: var(--surface-2); }
   nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
@@ -340,7 +381,7 @@
   main { min-width: 0; }
   .top {
     position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 8px; padding: 10px 20px;
-    background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px);
+    background: var(--bg); box-shadow: 0 1px 0 var(--border);
   }
   .top h1 { flex: 1; margin: 0; font-size: 20px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .menu { display: none; }
@@ -355,7 +396,8 @@
   }
   .drop div { background: var(--surface); padding: 24px 36px; border-radius: 20px; text-align: center; color: var(--accent); display: flex; flex-direction: column; align-items: center; }
   .drop p { margin: 8px 0 0; font-weight: 500; }
-  .toast {
+  .view { display: flex; flex-direction: column; gap: 12px; animation: zy-rise 0.22s cubic-bezier(0.2, 0, 0, 1); }
+  .toast { animation: zy-rise 0.2s cubic-bezier(0.2, 0, 0, 1);
     position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 70; background: var(--text); color: var(--bg);
     padding: 10px 18px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow); max-width: calc(100vw - 32px);
   }
@@ -363,9 +405,12 @@
 
   @media (max-width: 860px) {
     .shell { grid-template-columns: 1fr; }
-    .side { position: fixed; left: 0; top: 0; width: 272px; transform: translateX(-100%); transition: transform 0.2s ease; box-shadow: var(--shadow); background: var(--surface); }
-    .side.open { transform: none; }
-    .drawer-scrim { display: block; position: fixed; inset: 0; z-index: 15; background: rgba(0, 0, 0, 0.35); border: none; }
+    .side {
+      position: fixed; left: 0; top: 0; width: 280px; transform: translateX(-100%); visibility: hidden;
+      transition: transform 0.26s cubic-bezier(0.2, 0, 0, 1), visibility 0s 0.26s; box-shadow: var(--shadow); background: var(--surface);
+    }
+    .side.open { transform: none; visibility: visible; transition: transform 0.26s cubic-bezier(0.2, 0, 0, 1); }
+    .drawer-scrim { display: block; position: fixed; inset: 0; z-index: 15; background: rgba(0, 0, 0, 0.35); border: none; animation: zy-fade 0.2s; }
     .menu { display: inline-grid; }
     .top { padding: 8px 12px; }
     .content { padding: 4px 4px 80px; }

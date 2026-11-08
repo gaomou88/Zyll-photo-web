@@ -229,8 +229,9 @@ export class GoogleDrive implements Drive {
         signal: opts.signal,
       }, (s) => (s >= 200 && s < 300) || s === 308);
       if (r.status === 308) {
+        // Range 头不一定对网页公开；读不到时按这一片已经收下算（每片都是按顺序整片发的）
         const got = r.headers.get("Range")?.split("-")[1];
-        return { next: got ? Number(got) + 1 : 0 };
+        return { next: got ? Number(got) + 1 : to };
       }
       return { done: (await r.json()).id };
     });
@@ -282,24 +283,41 @@ export class OneDrive implements Drive {
     return (await r.json()).id;
   }
 
-  /** 预签名的下载地址（不带 Authorization，支持 Range），缓存 30 分钟。 */
-  private async downloadUrl(id: string): Promise<string> {
+  /**
+   * 预签名的下载地址（不带 Authorization，支持 Range），缓存 30 分钟。
+   * 个人账号用 $select 时有时不返回下载地址，所以不加 $select；两种属性名都认。
+   */
+  private async downloadUrl(id: string): Promise<string | null> {
     const c = this.downloadUrls.get(id);
     if (c && Date.now() - c.at < 30 * 60_000) return c.url;
-    const o = await (await request(this.account, `${MS_API}/me/drive/items/${id}?$select=id,@microsoft.graph.downloadUrl`)).json();
-    const url = o["@microsoft.graph.downloadUrl"] as string | undefined;
-    if (!url) throw new HttpError(404, "文件不存在");
+    const o = await (await request(this.account, `${MS_API}/me/drive/items/${id}`)).json();
+    const url = (o["@microsoft.graph.downloadUrl"] ?? o["@content.downloadUrl"]) as string | undefined;
+    if (!url) return null;
     this.downloadUrls.set(id, { url, at: Date.now() });
     return url;
   }
 
   async download(id: string, range?: [number, number], signal?: AbortSignal): Promise<Uint8Array> {
     const url = await this.downloadUrl(id);
-    return bytes(await request(null, url, { headers: rangeHeader(range), signal }));
+    // 拿不到预签名地址时走 /content（302 跳到下载地址，跨源跳转时浏览器会去掉 Authorization）
+    if (!url) return bytes(await request(this.account, `${MS_API}/me/drive/items/${id}/content`, { headers: rangeHeader(range), signal }));
+    try {
+      return bytes(await request(null, url, { headers: rangeHeader(range), signal }));
+    } catch (e) {
+      // 地址过期：清缓存重取一次
+      if (e instanceof HttpError && (e.status === 401 || e.status === 403 || e.status === 404)) {
+        this.downloadUrls.delete(id);
+        const fresh = await this.downloadUrl(id);
+        if (fresh) return bytes(await request(null, fresh, { headers: rangeHeader(range), signal }));
+      }
+      throw e;
+    }
   }
 
   async mediaRequest(id: string): Promise<MediaRequest> {
-    return { url: await this.downloadUrl(id), headers: {} };
+    const url = await this.downloadUrl(id);
+    if (url) return { url, headers: {} };
+    return { url: `${MS_API}/me/drive/items/${id}/content`, headers: { Authorization: `Bearer ${await accessToken(this.account)}` } };
   }
 
   async upload(path: string[], src: UploadSource, opts: UploadOptions = {}): Promise<string> {

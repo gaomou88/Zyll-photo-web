@@ -55,7 +55,9 @@
         url = made = URL.createObjectURL(b);
         kind = "image";
       } catch (e) {
-        if (!cancelled) error = (e as Error).message;
+        if (cancelled) return;
+        error = (e as Error).message;
+        p.acc.noteError(e);
       } finally {
         if (!cancelled) loading = false;
       }
@@ -104,7 +106,7 @@
         <!-- svelte-ignore a11y_media_has_caption -->
         <video src={url} controls autoplay playsinline></video>
       {:else if url}
-        <img src={url} alt={photo.item.n} />
+        {#key photo.key}<img src={url} alt={photo.item.n} decoding="async" />{/key}
       {/if}
       {#if error}
         <div class="msg"><Icon name="warn" /> {error}</div>
@@ -134,7 +136,9 @@
   .viewer {
     position: fixed; inset: 0; z-index: 40; background: #000; color: #eee;
     display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto 1fr;
+    animation: zy-fade 0.18s ease-out;
   }
+  .stage img, .stage video { animation: zy-fade 0.22s ease-out; }
   .bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: linear-gradient(#000c, #0000); }
   .bar .icon-btn:hover { background: #ffffff22; }
   .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; opacity: 0.85; }
@@ -154,7 +158,7 @@
     border: 3px solid #ffffff44; border-top-color: #fff; animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .info { width: 300px; background: #151514; padding: 16px 20px; overflow: auto; }
+  .info { animation: zy-fade 0.18s ease-out; width: 300px; background: #151514; padding: 16px 20px; overflow: auto; }
   @media (max-width: 700px) { .info { position: absolute; inset: auto 0 0 0; width: auto; max-height: 50%; } }
   .info h3 { margin: 0 0 12px; font-size: 16px; }
   dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; font-size: 13px; }
