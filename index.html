@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="description" content="Zyll 相册网页版：在电脑上查看、上传、下载存放在你自己网盘里的端到端加密照片。" />
+    <!--
+      GitHub Pages 不能设置响应头，CSP 只能用 meta。
+      connect-src：Google Drive / Microsoft Graph / 微软登录，以及 OneDrive 下载和上传用的预签名地址。
+      wasm-unsafe-eval：Argon2id 和 HEIC 解码的 WASM。
+    -->
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://www.googleapis.com https://graph.microsoft.com https://login.microsoftonline.com https://*.1drv.com https://*.sharepoint.com https://*.livefilestore.com https://api.onedrive.com https://*.files.1drv.com; object-src 'none'; base-uri 'self'; form-action 'none'" />
+    <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <title>Zyll 相册</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

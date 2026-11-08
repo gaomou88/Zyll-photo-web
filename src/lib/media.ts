@@ -1,0 +1,157 @@
+import { createSHA256 } from "hash-wasm";
+import { THUMB_PX } from "./config";
+
+/** 浏览器里处理照片：内容指纹、拍摄时间、缩略图、HEIC 转码。 */
+
+/** 文件内容的 SHA-256（小写十六进制），分段读，大视频也不占满内存。和安卓的 `h` 一致。 */
+export async function sha256Hex(b: Blob, onProgress?: (done: number) => void): Promise<string> {
+  const h = await createSHA256();
+  h.init();
+  const STEP = 8 * 1024 * 1024;
+  for (let off = 0; off < b.size; off += STEP) {
+    h.update(new Uint8Array(await b.slice(off, off + STEP).arrayBuffer()));
+    onProgress?.(Math.min(b.size, off + STEP));
+  }
+  return h.digest("hex");
+}
+
+const EXT_MIME: Record<string, string> = {
+  jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp", bmp: "image/bmp",
+  heic: "image/heic", heif: "image/heif", avif: "image/avif", dng: "image/x-adobe-dng",
+  mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", webm: "video/webm", "3gp": "video/3gpp", mkv: "video/x-matroska",
+};
+
+export function mimeOf(f: File): string {
+  if (f.type) return f.type;
+  return EXT_MIME[f.name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
+}
+
+export const isMedia = (mime: string) => mime.startsWith("image/") || mime.startsWith("video/");
+export const isHeic = (mime: string, name = "") => /image\/hei[cf]/.test(mime) || /\.(heic|heif)$/i.test(name);
+
+/** 拍摄时间：EXIF 的 DateTimeOriginal，没有就用文件修改时间。 */
+export async function takenAt(f: File, mime: string): Promise<number> {
+  if (mime.startsWith("image/")) {
+    try {
+      const exifr = await import("exifr");
+      const o = await exifr.parse(f, { pick: ["DateTimeOriginal", "CreateDate"] });
+      const d: unknown = o?.DateTimeOriginal ?? o?.CreateDate;
+      if (d instanceof Date && !isNaN(d.getTime())) return d.getTime();
+    } catch {
+      /* 没有 EXIF */
+    }
+  }
+  return f.lastModified || Date.now();
+}
+
+/** HEIC → JPEG（大多数电脑浏览器不能直接显示 HEIC）。转码库很大，用到时才加载。 */
+export async function heicToJpeg(b: Blob, quality = 0.92): Promise<Blob> {
+  const { heicTo } = await import("heic-to/csp");
+  return heicTo({ blob: b, type: "image/jpeg", quality });
+}
+
+async function decodeImage(b: Blob, mime: string, name: string): Promise<ImageBitmap> {
+  try {
+    return await createImageBitmap(b, { imageOrientation: "from-image" });
+  } catch (e) {
+    if (!isHeic(mime, name)) throw e;
+    return createImageBitmap(await heicToJpeg(b, 0.85), { imageOrientation: "from-image" });
+  }
+}
+
+function frameOfVideo(b: Blob): Promise<ImageBitmap> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(b);
+    const v = document.createElement("video");
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = "auto";
+    const done = (err?: unknown) => {
+      URL.revokeObjectURL(url);
+      v.removeAttribute("src");
+      v.load();
+      if (err) reject(err instanceof Error ? err : new Error("无法读取视频"));
+    };
+    const timer = setTimeout(() => done(new Error("读取视频超时")), 15_000);
+    v.onloadedmetadata = () => {
+      v.currentTime = Math.min(1, (v.duration || 0) / 2);
+    };
+    v.onseeked = async () => {
+      clearTimeout(timer);
+      try {
+        const bmp = await createImageBitmap(v);
+        done();
+        resolve(bmp);
+      } catch (e) {
+        done(e);
+      }
+    };
+    v.onerror = () => {
+      clearTimeout(timer);
+      done(new Error("浏览器不支持这种视频格式"));
+    };
+    v.src = url;
+  });
+}
+
+/** 做一张缩略图（JPEG，短边 [THUMB_PX]），和安卓上传的缩略图同样大小。做不出来时返回 null。 */
+export async function makeThumbnail(b: Blob, mime: string, name: string): Promise<Blob | null> {
+  let bmp: ImageBitmap;
+  try {
+    bmp = mime.startsWith("video/") ? await frameOfVideo(b) : await decodeImage(b, mime, name);
+  } catch {
+    return null;
+  }
+  const scale = Math.min(1, THUMB_PX / Math.min(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(bmp, 0, 0, w, h);
+  bmp.close();
+  return new Promise((resolve) => canvas.toBlob((x) => resolve(x), "image/jpeg", 0.85));
+}
+
+export function fmtSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(2)} GB`;
+}
+
+/** 照片墙的日期标题：今天 / 昨天 / 11月3日 周一 / 2024年5月1日。 */
+export function dayLabel(t: number): string {
+  const d = new Date(t);
+  const now = new Date();
+  const start = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((start(now) - start(d)) / 86_400_000);
+  if (diff === 0) return "今天";
+  if (diff === 1) return "昨天";
+  const week = "日一二三四五六"[d.getDay()];
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 周${week}`;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+export const dayKey = (t: number) => {
+  const d = new Date(t);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+};
+
+export function fmtTime(t: number): string {
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** 下载一个 Blob 到本地。 */
+export function saveBlob(b: Blob, name: string) {
+  const url = URL.createObjectURL(b);
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}

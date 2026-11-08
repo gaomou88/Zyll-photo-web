@@ -1,0 +1,51 @@
+name: Pages
+
+# PR 和测试分支：测试 + 类型检查 + 构建。main：构建并部署到 GitHub Pages。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm build
+        env:
+          # 和安卓版同一个 Google Cloud 项目里的“网页应用”OAuth 客户端；同一个 Entra 应用注册
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.ZYLL_GOOGLE_WEB_CLIENT_ID }}
+          VITE_ONEDRIVE_CLIENT_ID: ${{ secrets.ZYLL_ONEDRIVE_CLIENT_ID }}
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: dist
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
