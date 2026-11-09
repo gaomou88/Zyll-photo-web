@@ -54,6 +54,7 @@
       </div>
     {/if}
     {#if video}<span class="badge"><Icon name="play" size={14} /></span>{/if}
+    {#if !video && (photo.motion || photo.live)}<span class="badge live" title="动态照片"><Icon name="live" size={14} /></span>{/if}
   </button>
   <button class="check" class:on={selected} class:show={selecting} aria-label="选择" onclick={(e) => ontoggle(e.shiftKey)}>
     <Icon name="check" size={16} />
@@ -77,6 +78,7 @@
     position: absolute; right: 6px; bottom: 6px; color: #fff; background: rgba(0, 0, 0, 0.45);
     border-radius: 999px; padding: 3px 6px; display: flex; pointer-events: none;
   }
+  .badge.live { bottom: auto; top: 6px; padding: 3px; }
   .check {
     position: absolute; left: 6px; top: 6px; width: 24px; height: 24px; border-radius: 50%;
     border: 2px solid rgba(255, 255, 255, 0.9); background: rgba(0, 0, 0, 0.18); color: transparent;

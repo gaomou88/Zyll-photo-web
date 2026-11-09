@@ -16,6 +16,14 @@ describe("备份目录", () => {
     expect(d.settings).toEqual({ backup: {} });
   });
 
+  it("动态照片标记 mo：只认 true，写回时保留，没有就不写", () => {
+    const d = doc({ seq: 1, items: [{ r: "a", mo: true }, { r: "b", mo: 1 }, { r: "c" }] });
+    expect(d.items.map((i) => i.mo)).toEqual([true, undefined, undefined]);
+    const out = JSON.parse(serializeIndex(mergeDocs([d]), 2, true)) as { items: Record<string, unknown>[] };
+    expect(out.items.map((i) => "mo" in i)).toEqual([true, false, false]);
+    expect(out.items[0]!.mo).toBe(true);
+  });
+
   it("格式不对时报损坏", () => {
     expect(() => parseIndex("{")).toThrow();
     expect(() => parseIndex("[]")).toThrow();
