@@ -109,6 +109,14 @@ interface PendingDel {
 
 export type AccountState = "loading" | "ready" | "locked" | "signin" | "error";
 
+/** 本机刚生成、还没写进网盘的密钥包。 */
+export interface NewVault {
+  json: string;
+  recoveryKey: string;
+  vaultId: string;
+  masterKey: Uint8Array;
+}
+
 export class Account {
   state = $state<AccountState>("loading");
   error = $state("");
@@ -193,41 +201,70 @@ export class Account {
    * 同时在隐藏区写 storage.json（moved → visible），这样 App 第一次连上时会直接去可见文件夹找。
    * 返回新建的恢复密钥（要让用户抄下来），没新建时返回 null。
    */
-  async setup(opts: { password?: string; reuseFrom?: Account; visible: boolean }): Promise<string | null> {
-    let recovery: string | null = null;
+  async setup(opts: { fresh?: NewVault; reuseFrom?: Account; visible: boolean }): Promise<void> {
+    let hidden: GoogleDrive | null = null;
     await this.lock(async () => {
-      // 再确认一次网盘里确实还是空的（防止手机刚好同时在建）
       if (this.drive instanceof GoogleDrive) await this.resolveGoogleRoot();
-      if ((await this.drive.findFile(KEYBUNDLE_PATH)) || (await this.drive.findFile(INDEX_ENCRYPTED)) || (await this.drive.findFile(INDEX_PLAIN))) {
-        throw new Error(t("网盘里已经有 Zyll 的备份了，请刷新页面。"));
-      }
-      if (opts.visible && this.drive instanceof GoogleDrive && (this.drive as GoogleDrive).root === "appDataFolder") {
-        const hidden = this.drive as GoogleDrive;
-        const id = (await GoogleDrive.findVisibleRoot(this.stored)) ?? (await GoogleDrive.createVisibleRoot(this.stored));
-        const marker = { format: "zyll-storage", version: 1, state: "moved", to: "visible", at: Date.now(), device: deviceId };
-        await hidden.upload(["storage.json"], bytesSource(utf8.encode(JSON.stringify(marker)), "application/json"), { replace: true });
-        this.drive = new GoogleDrive(this.stored, id);
-        this.where = t("Google 网盘 · 我的云端硬盘/{folder}", { folder: VISIBLE_ROOT });
-      }
+      // 再确认一次网盘里确实还是空的（防止手机刚好同时在建）
+      await this.assertEmpty();
       let json: string | null = null;
       if (opts.reuseFrom) {
         json = opts.reuseFrom.bundleJson;
         if (!json || !opts.reuseFrom.wrapKey()) throw new Locked();
-      } else if (opts.password) {
-        const r = await runKdf({ op: "create", password: opts.password });
-        const v = await keybundle.vaultFromMasterKey(r.vaultId, r.masterKey);
+      } else if (opts.fresh) {
+        const v = await keybundle.vaultFromMasterKey(opts.fresh.vaultId, opts.fresh.masterKey);
         keyring.set(v.vaultId, v.wrapKey);
-        json = r.json!;
-        recovery = r.recoveryKey!;
+        json = opts.fresh.json;
+      }
+      if (opts.visible && this.drive instanceof GoogleDrive && (this.drive as GoogleDrive).root === "appDataFolder") {
+        hidden = this.drive as GoogleDrive;
+        const id = (await GoogleDrive.findVisibleRoot(this.stored)) ?? (await GoogleDrive.createVisibleRoot(this.stored));
+        const visibleDrive = new GoogleDrive(this.stored, id);
+        // 以前用过的文件夹里可能留着旧标记（比如 moved → hidden），和 App 的 beginMove 一样先删掉
+        const old = await visibleDrive.findFile(["storage.json"]);
+        if (old) await visibleDrive.delete(old);
+        this.drive = visibleDrive;
+        this.where = t("Google 网盘 · 我的云端硬盘/{folder}", { folder: VISIBLE_ROOT });
+        await this.assertEmpty();
       }
       if (json) {
         await this.drive.upload(KEYBUNDLE_PATH, bytesSource(utf8.encode(json), "application/json"), { replace: true });
         this.bundleJson = json;
       }
     });
-    // 开了加密就马上写一份加密的空目录（带 mode），手机和别的浏览器据此知道这个账号是加密的
+    // 开了加密就马上写一份加密的空目录（带 mode），手机和别的浏览器据此知道这个账号是加密的。
+    // 中途失败时，下次加载会在 finishSetup 里补写。
     if (this.bundleJson) await this.commit({ mode: { enc: true, at: Date.now() } });
-    return recovery;
+    // 库建好了最后才在隐藏区写 moved 标记：前面失败时隐藏区不会指向一个空文件夹
+    if (hidden) await this.writeMovedMarker(hidden);
+  }
+
+  private async assertEmpty() {
+    if ((await this.drive.findFile(KEYBUNDLE_PATH)) || (await this.drive.findFile(INDEX_ENCRYPTED)) || (await this.drive.findFile(INDEX_PLAIN))) {
+      throw new Error(t("网盘里已经有 Zyll 的备份了，请刷新页面。"));
+    }
+  }
+
+  private async writeMovedMarker(hidden: GoogleDrive) {
+    const marker = { format: "zyll-storage", version: 1, state: "moved", to: "visible", at: Date.now(), device: deviceId };
+    await hidden.upload(["storage.json"], bytesSource(utf8.encode(JSON.stringify(marker)), "application/json"), { replace: true });
+  }
+
+  /**
+   * 上次首次设置只做了一半（写了密钥包、空目录没写成，或者隐藏区的标记没写成）：解锁后补上。
+   */
+  async finishSetup() {
+    if (this.state !== "ready" || this.readOnly || this.migrating) return;
+    if (!this.bundleJson || this.encId || this.plainId || !this.wrapKey()) return;
+    try {
+      await this.commit({ mode: { enc: true, at: Date.now() } });
+      if (this.drive instanceof GoogleDrive && (this.drive as GoogleDrive).root !== "appDataFolder") {
+        const hidden = new GoogleDrive(this.stored, "appDataFolder");
+        if (!(await readMarker(hidden))) await this.writeMovedMarker(hidden);
+      }
+    } catch {
+      /* 下次再试 */
+    }
   }
 
   /** 操作中途登录过期：切到“需要重新连接”状态，界面会显示提示条。 */
@@ -266,6 +303,7 @@ export class Account {
       this.state = "ready";
       this.drive.quota().then((q) => (this.quota = q), () => {});
       await this.flushPending();
+      await this.finishSetup();
     } catch (e) {
       this.fail(e);
     }
@@ -306,8 +344,9 @@ export class Account {
     if (marker?.state === "moved") return at(marker.to === "visible" ? "visible" : "hidden");
     if (marker) return;
     // 没有标记：隐藏区里没有库、可见文件夹里有，就用可见的
-    const hiddenHas = !!(await hidden.findFile(INDEX_ENCRYPTED)) || !!(await hidden.findFile(INDEX_PLAIN));
-    if (!hiddenHas && visibleId) at("visible");
+    const has = async (d: GoogleDrive) =>
+      !!(await d.findFile(INDEX_ENCRYPTED)) || !!(await d.findFile(INDEX_PLAIN)) || !!(await d.findFile(KEYBUNDLE_PATH));
+    if (visibleId && !(await has(hidden)) && (await has(new GoogleDrive(this.stored, visibleId)))) at("visible");
   }
 
   /** 读网盘上的目录（加密的 + 明文的）并合并。 */
@@ -786,13 +825,21 @@ class Library {
     return this.accounts.find((a) => a !== except && a.bundleJson && a.wrapKey()) ?? null;
   }
 
-  /** 新账号的首次设置（见 Account.setup）；返回要抄下来的恢复密钥。 */
-  async setupAccount(acc: Account, opts: { password?: string; reuse?: boolean; visible: boolean }): Promise<string | null> {
+  /**
+   * 只在本机生成新的密钥包，不写网盘。先让用户抄下恢复密钥、确认“已保存”，再用 setupAccount 写进去
+   * （和 App 开启加密的顺序一样），这样中途关掉页面也不会留下一个没人知道恢复密钥的库。
+   */
+  async createVault(password: string): Promise<NewVault> {
+    const r = await runKdf({ op: "create", password });
+    return { json: r.json!, recoveryKey: r.recoveryKey!, vaultId: r.vaultId, masterKey: r.masterKey };
+  }
+
+  /** 新账号的首次设置（见 Account.setup）。 */
+  async setupAccount(acc: Account, opts: { fresh?: NewVault; reuse?: boolean; visible: boolean }) {
     const reuseFrom = opts.reuse ? (this.unlockedVaultAccount(acc) ?? undefined) : undefined;
     if (opts.reuse && !reuseFrom) throw new Locked();
-    const r = await acc.setup({ password: opts.password, reuseFrom, visible: opts.visible });
+    await acc.setup({ fresh: opts.fresh, reuseFrom, visible: opts.visible });
     if (acc.bundleJson) this.unlocked = true;
-    return r;
   }
 
   async connect(kind: DriveKind) {
@@ -864,6 +911,7 @@ class Library {
     if (!ok) throw lastErr ?? new Error(t("密码或恢复密钥不正确"));
     this.unlocked = true;
     await Promise.all(this.accounts.filter((a) => a.state !== "ready" || a.items.some((i) => i.e)).map((a) => a.load()));
+    await Promise.all(this.accounts.map((a) => a.finishSetup()));
   }
 
   /** 锁上：丢掉内存里的密钥，加密的内容重新需要密码。 */

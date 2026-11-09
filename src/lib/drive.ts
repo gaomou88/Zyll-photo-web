@@ -1,5 +1,6 @@
 import { NeedsSignIn, accessToken, invalidate, type StoredAccount } from "./auth";
 import { SIMPLE_UPLOAD_MAX, SLICE, VISIBLE_ROOT } from "./config";
+import { t } from "./i18n";
 
 /** 要上传的内容：按需读出一段字节（加密文件边读边加密，不整个放进内存）。 */
 export interface UploadSource {
@@ -222,7 +223,7 @@ export class GoogleDrive implements Drive {
       signal: opts.signal,
     });
     const session = start.headers.get("Location");
-    if (!session) throw new Error("Google 没有返回上传地址");
+    if (!session) throw new Error(t("Google 没有返回上传地址"));
     return sendSlices(src, 0, opts, async (chunk, from, to) => {
       const r = await request(null, session, {
         method: "PUT",
@@ -416,16 +417,16 @@ export class OneDrive implements Drive {
       body: JSON.stringify({ parentReference: { driveId: parent.driveId, id: parent.id }, name: path[path.length - 1] }),
     }, (s) => s === 202 || (s >= 200 && s < 300));
     const monitor = r.headers.get("Location");
-    if (!monitor) throw new Error("OneDrive 没有返回复制进度地址");
+    if (!monitor) throw new Error(t("OneDrive 没有返回复制进度地址"));
     // 复制是异步的：轮询进度地址（不带 Authorization）
     for (let i = 0; i < 120; i++) {
       await sleep(Math.min(500 * (i + 1), 3000));
       const m = await fetch(monitor);
       const o = await m.json().catch(() => ({}));
       if (o.resourceId && (o.status === "completed" || m.status === 200)) return o.resourceId as string;
-      if (o.status === "failed") throw new Error("OneDrive 复制失败");
+      if (o.status === "failed") throw new Error(t("OneDrive 复制失败"));
     }
-    throw new Error("OneDrive 复制超时");
+    throw new Error(t("OneDrive 复制超时"));
   }
 
   async quota(): Promise<Quota> {
