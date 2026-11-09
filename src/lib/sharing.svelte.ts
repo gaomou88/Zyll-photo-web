@@ -668,6 +668,12 @@ class SharedAlbums {
    */
   private async sharedElsewhere(acc: Account, albumId: string): Promise<Keep> {
     const me = await this.identity(acc);
+    // 先和网盘上的列表同步（手机刚建的相册也算进去）；同步不了就一张都不撤
+    try {
+      await this.syncList(acc);
+    } catch {
+      return () => true;
+    }
     const byEmail = new Map<string, Set<string>>();
     for (const ref of this.albums) {
       if (ref.acc !== acc.key || ref.albumId === albumId || (ref.myRole !== null && ref.myRole !== "manager")) continue;
