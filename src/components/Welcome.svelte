@@ -21,7 +21,7 @@
 
 <div class="welcome">
   <div class="card">
-    <div class="logo"><Icon name="photos" size={34} /></div>
+    <img class="logo" src="./icon-192.png" alt="Zyll" width="72" height="72" />
     <h1>Zyll 相册 · 网页版</h1>
     <p>在电脑上查看、上传和下载你手机备份到网盘的照片。照片存在<strong>你自己的</strong>网盘里，加密的照片只在这个浏览器里解密，网盘和任何服务器都看不到内容。</p>
     <div class="buttons">
@@ -48,7 +48,7 @@
     width: min(520px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 24px;
     padding: 32px 28px; display: flex; flex-direction: column; gap: 14px; text-align: center; align-items: center;
   }
-  .logo { width: 64px; height: 64px; border-radius: 20px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+  .logo { width: 72px; height: 72px; }
   h1 { margin: 0; font-size: 24px; font-weight: 600; }
   p { margin: 0; }
   .legal a { color: var(--accent); }
