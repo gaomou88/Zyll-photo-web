@@ -30,6 +30,11 @@ export interface IndexItem {
   d: string;
   /** 加密用的密钥（和目录不是同一套时） */
   k: string;
+  /**
+   * 动态照片：文件里嵌着一段短视频（spec/motion-photo.md）。只是给照片墙打标记用的提示：
+   * 没有这个字段不代表不是动态照片（旧版本写的、或别的设备没识别），打开时还会按内容再找一次。
+   */
+  mo?: boolean;
 }
 
 export interface IndexDoc {
@@ -72,6 +77,7 @@ export function parseIndex(text: string): IndexDoc {
     return {
       r: str(i.r), e: i.e === true, n: str(i.n), a: str(i.a), m: str(i.m), t: num(i.t), s: num(i.s),
       h: str(i.h), th: str(i.th), d: str(i.d), k: str(i.k),
+      ...(i.mo === true ? { mo: true } : {}),
     } satisfies IndexItem;
   });
   const mode = d.mode && typeof d.mode === "object" ? { enc: (d.mode as { enc?: unknown }).enc === true, at: num((d.mode as { at?: unknown }).at) } : null;
@@ -150,6 +156,7 @@ export function serializeIndex(m: Merged, seq: number, encrypt: boolean): string
   const items = m.items.filter((i) => encrypt || !i.e).map((i) => {
     const o: Record<string, unknown> = { r: i.r, e: i.e, n: i.n, a: i.a, m: i.m, t: i.t, s: i.s, h: i.h, th: i.th, d: i.d };
     if (i.k) o.k = i.k;
+    if (i.mo) o.mo = true;
     return o;
   });
   const doc: Record<string, unknown> = {
