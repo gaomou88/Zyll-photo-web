@@ -4,6 +4,7 @@ import { ENCRYPTED_FOLDER, INDEX_ENCRYPTED, INDEX_PLAIN, KEYBUNDLE_PATH, THUMB_F
 import { GoogleDrive, OneDrive, type Drive, type Quota } from "./drive";
 import { applyChange, mergeDocs, parseIndex, serializeIndex, type IndexChange, type IndexDoc, type IndexItem, type Merged } from "./indexdoc";
 import { isHeic, makeThumbnail, mimeOf, sha256Hex, takenAt } from "./media";
+import { blobReader, findMotionVideo, livePairKey, mayHaveMotion } from "./motion";
 import { bytesSource, decryptKind, encryptingSource, plainSource } from "./zylcio";
 import { runKdf } from "../kdf";
 
@@ -84,6 +85,10 @@ export interface Photo {
   item: IndexItem;
   /** 同一张照片（内容指纹相同）在其他账号里的备份 */
   copies: { acc: Account; item: IndexItem }[];
+  /** 目录里标着是动态照片（某一份写了 mo） */
+  motion?: boolean;
+  /** iPhone 实况照片：同相簿同名的那段 MOV（见 livePairKey） */
+  live?: Photo;
 }
 
 interface Pulled {
@@ -521,6 +526,8 @@ export class Account {
     const h = await sha256Hex(f, (d) => onProgress("计算指纹", d / Math.max(1, f.size)));
     if (this.hasHash(h) || this.pending().some((i) => i.h === h)) return null;
     const t = await takenAt(f, mime);
+    // 动态照片：文件原样上传（视频跟着走），这里只是在目录里标一下，照片墙上好显示标记
+    const mo = mayHaveMotion(mime, f.name) && !!(await findMotionVideo(blobReader(f), f.size, true).catch(() => null));
     onProgress("生成缩略图", 0);
     const thumb = await makeThumbnail(f, mime, f.name);
     const encrypt = this.uploadEncrypted;
@@ -543,7 +550,7 @@ export class Account {
         // 缩略图传失败不要紧：手机会自己补
       }
     }
-    const item: IndexItem = { r, e: encrypt, n: f.name, a: album, m: mime, t, s: f.size, h, th, d: deviceId, k: "" };
+    const item: IndexItem = { r, e: encrypt, n: f.name, a: album, m: mime, t, s: f.size, h, th, d: deviceId, k: "", ...(mo ? { mo: true } : {}) };
     this.setPending([...this.pending(), item]);
     return item;
   }
@@ -688,6 +695,19 @@ class Library {
         const p: Photo = { key: `${acc.key}/${item.r}`, acc, item, copies: [] };
         if (item.h) byHash.set(item.h, p);
         out.push(p);
+      }
+    }
+    // 动态照片标记：任何一份写了就算；iPhone 实况照片按同相簿同名配上 MOV（MOV 本身照常显示）
+    const movs = new Map<string, Photo>();
+    for (const p of out) {
+      p.motion = p.item.mo === true || p.copies.some((c) => c.item.mo === true);
+      const k = livePairKey(p.item.a, p.item.n, p.item.m);
+      if (k && !k.still && !movs.has(k.key)) movs.set(k.key, p);
+    }
+    if (movs.size) {
+      for (const p of out) {
+        const k = livePairKey(p.item.a, p.item.n, p.item.m);
+        if (k?.still) p.live = movs.get(k.key);
       }
     }
     return out.sort((a, b) => b.item.t - a.item.t);
