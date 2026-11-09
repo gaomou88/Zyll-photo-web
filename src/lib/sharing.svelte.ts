@@ -2,6 +2,7 @@ import { BlobKind, randomBytes, sha256, sharing, toHex, zylc } from "@zyll/crypt
 import { ENCRYPTED_FOLDER } from "./config";
 import { GoogleDrive, isSharingDrive, type SharingDrive } from "./drive";
 import { t } from "./i18n";
+import { decryptKind } from "./zylcio";
 import { Locked, library, lsGet, lsSet, type Account } from "./library.svelte";
 import type { IndexItem } from "./indexdoc";
 
@@ -19,6 +20,7 @@ const canWrite = (r: ShareRole | null) => r === "contributor" || r === "manager"
 export const SHARED_FOLDER = "共享";
 const MANIFEST = "album.json";
 const INDEX = "index.zylc";
+const INDEX_NAME = /^index(-\d+(-[0-9a-f]{8})?)?\.zylc$/;
 const LIST_PATH = [ENCRYPTED_FOLDER, "shared-albums.zylc"];
 const LIST_BROKEN = [ENCRYPTED_FOLDER, "shared-albums-broken.zylc"];
 const IDENTITY_PATH = [ENCRYPTED_FOLDER, "identity.zylc"];
@@ -123,6 +125,8 @@ interface Manifest {
   keys: Record<string, SealedKey>;
   indexSha: string;
   indexSeq: number;
+  /** 目录文件名（index-<seq>.zylc）；旧清单没有这个字段时是 index.zylc。 */
+  indexFile: string;
   originals: boolean;
 }
 
@@ -136,7 +140,7 @@ function manifestBody(m: Manifest): Uint8Array {
     owner: memberJson(m.owner),
     members: m.members.map(memberJson),
     keys,
-    index: { sha256: m.indexSha, seq: m.indexSeq },
+    index: { sha256: m.indexSha, seq: m.indexSeq, ...(m.indexFile !== INDEX ? { file: m.indexFile } : {}) },
     opts: { originals: m.originals },
   }));
 }
@@ -171,8 +175,10 @@ async function openManifest(text: string): Promise<Manifest> {
     members: await Promise.all(((o.members ?? []) as Record<string, any>[]).map(mem)),
     keys,
     indexSha: String(o.index?.sha256 ?? ""), indexSeq: Number(o.index?.seq) || 0,
+    indexFile: o.index?.file === undefined ? INDEX : String(o.index.file),
     originals: o.opts?.originals !== false,
   };
+  if (!INDEX_NAME.test(m.indexFile)) throw new Tampered();
   const who = signer(m, String(f.by));
   if (!who || !(await sharing.verifyManifest(body, unb64(String(f.sig)), who.ed))) throw new Tampered();
   return m;
@@ -243,7 +249,17 @@ export interface AlbumRef {
 
 const REFS = "zyll-shared-refs";
 const REMOVED = "zyll-shared-removed";
+const DIRTY = "zyll-shared-dirty";
 const seqKey = (albumId: string) => `zyll-shared-seq-${albumId}`;
+
+function dirtyList(): string[] {
+  try {
+    const a = JSON.parse(lsGet(DIRTY) ?? "[]");
+    return Array.isArray(a) ? a : [];
+  } catch {
+    return [];
+  }
+}
 
 function loadRefs(): AlbumRef[] {
   try {
@@ -296,9 +312,19 @@ class SharedAlbums {
     this.pushLater(old.acc);
   }
 
+  /** 列表改了要推到网盘：先记下，推成功才去掉；没推上去的下次加载时再推。 */
   private pushLater(accKey: string) {
+    lsSet(DIRTY, JSON.stringify([...new Set([...dirtyList(), accKey])]));
     const acc = library.accounts.find((a) => a.key === accKey);
     if (acc) this.syncList(acc).catch(() => {});
+  }
+
+  /** 上次没推上去的账号再推一次（库加载完、解锁后调用）。 */
+  pushDirty() {
+    for (const key of dirtyList()) {
+      const acc = library.accounts.find((a) => a.key === key);
+      if (acc && acc.state === "ready" && acc.wrapKey()) this.syncList(acc).catch(() => {});
+    }
   }
 
   // ---------- 账号 ----------
@@ -306,6 +332,13 @@ class SharedAlbums {
   /** 这个账号现在能不能共享；不能时返回原因。 */
   problem(acc: Account): SharingProblem {
     if (acc.drive instanceof GoogleDrive && (acc.drive as GoogleDrive).root === "appDataFolder") return "visible";
+    if (!acc.bundleJson) return "encrypt";
+    if (!acc.wrapKey()) return "locked";
+    return null;
+  }
+
+  /** 用这个账号加入别人的相册还缺什么：只要库开着加密并且已解锁（身份密钥存在库里），不要求可见文件夹。 */
+  joinProblem(acc: Account): SharingProblem {
     if (!acc.bundleJson) return "encrypt";
     if (!acc.wrapKey()) return "locked";
     return null;
@@ -335,17 +368,23 @@ class SharedAlbums {
 
   private async loadIdentity(acc: Account): Promise<ShareIdentity> {
     const key = this.key(acc);
-    const id = await acc.drive.findFile(IDENTITY_PATH);
-    if (id) {
-      const o = JSON.parse(dec.decode(await zylc.decrypt(await acc.drive.download(id), key)));
+    const read = async (): Promise<ShareIdentity | null> => {
+      const id = await acc.drive.findFile(IDENTITY_PATH);
+      if (!id) return null;
+      const o = JSON.parse(dec.decode(await decryptKind(await acc.drive.download(id), key, BlobKind.Other)));
       if (o?.format !== "zyll-identity") throw new Error(t("身份密钥文件格式不对"));
       return sharing.identityFrom(unb64(o.x), unb64(o.ed));
-    }
+    };
+    const existing = await read();
+    if (existing) return existing;
     const fresh = await sharing.generateIdentity();
     const plain = enc.encode(JSON.stringify({ format: "zyll-identity", version: 1, x: b64(fresh.xPriv), ed: b64(fresh.edPriv), created: Date.now() }));
     const ct = await zylc.encrypt(plain, BlobKind.Other, key);
+    // 上传前再查一次（手机可能刚好也在生成），上传后读回来：以网盘上的那份为准，两边不会各用一套
+    const raced = await read();
+    if (raced) return raced;
     await acc.drive.upload(IDENTITY_PATH, { size: ct.length, mime: "application/octet-stream", read: async (a, b) => ct.slice(a, b) }, { replace: true });
-    return fresh;
+    return (await read()) ?? fresh;
   }
 
   /** 自己的分享名片：链接和安全码。 */
@@ -378,9 +417,14 @@ class SharedAlbums {
       const bytes = await acc.drive.download(id);
       let o: Record<string, any> | null = null;
       try {
-        o = JSON.parse(dec.decode(await zylc.decrypt(bytes, key)));
+        o = JSON.parse(dec.decode(await decryptKind(bytes, key, BlobKind.Other)));
         if (o?.format !== "zyll-shared-list") throw new Error("bad");
       } catch {
+        // 另一套已解锁的密钥（换密钥过渡期）能解开：先不动它，等这边换完
+        for (const k of library.wrapKeys()) {
+          if (k === key) continue;
+          if (await decryptKind(bytes, k, BlobKind.Other).then(() => true, () => false)) throw new Error(t("共享相册列表是用另一套密钥写的，暂时不改它"));
+        }
         // 解不开或格式不对：另存一份，按本机列表重建（和 App 一样）
         o = null;
         await acc.drive.upload(LIST_BROKEN, { size: bytes.length, mime: "application/octet-stream", read: async (a, b) => bytes.slice(a, b) }, { replace: true });
@@ -411,6 +455,7 @@ class SharedAlbums {
     }));
     const ct = await zylc.encrypt(plain, BlobKind.Other, key);
     await acc.drive.upload(LIST_PATH, { size: ct.length, mime: "application/octet-stream", read: async (a, b) => ct.slice(a, b) }, { replace: true });
+    lsSet(DIRTY, JSON.stringify(dirtyList().filter((k) => k !== acc.key)));
   }
 
   /** 兜底：扫一遍自己网盘的「共享/」，主人是自己的相册认回来（列表丢了、旧版本建的）。 */
@@ -481,22 +526,51 @@ class SharedAlbums {
 
   private async readIndex(ref: AlbumRef, m: Manifest, ak: Uint8Array): Promise<Index> {
     const drive = this.sd(this.account(ref));
-    const id = await drive.findChild(ref.folderId, INDEX);
-    if (!id) throw new Tampered();
+    let id = await drive.findChild(ref.folderId, m.indexFile);
+    if (!id) {
+      // 另一个管理者可能刚写了新目录、删了旧的：重读一次清单
+      const again = await this.loadManifest(ref);
+      if (again.seq !== m.seq) return this.readIndex(ref, again, again.epoch === m.epoch ? ak : await this.albumKey(again, await this.identity(this.account(ref))));
+      id = await drive.findChild(ref.folderId, m.indexFile);
+      if (!id) throw new Error(t("暂时读不到，请稍后再试"));
+    }
     const bytes = await drive.downloadAny(id);
     // 有写权限的成员能替换文件，但改不了签过名的清单：哈希对不上就不读
     if (toHex(await sha256(bytes)) !== m.indexSha) throw new Tampered();
-    return parseIndexJson(await zylc.decrypt(bytes, await sharing.albumWrapKey(ak, m.albumId)));
+    return parseIndexJson(await decryptKind(bytes, await sharing.albumWrapKey(ak, m.albumId), BlobKind.IndexSnapshot));
   }
 
   /** 写目录和清单（主人或管理者），返回新清单。 */
   private async writeAlbum(ref: AlbumRef, m: Manifest, me: ShareIdentity, ak: Uint8Array, index: Index): Promise<Manifest> {
     const drive = this.sd(this.account(ref));
+    // 新目录用新名字，清单写成功后才删旧的：
+    // 清单没写成时旧清单还指向旧目录，相册照常能打开
+    // 文件名用新清单的 seq 加随机后缀（和 App 一致）：不会和旧清单指向的那份同名，
+    // 两个管理者同时写也不会互相覆盖
+    const file = `index-${m.seq + 1}-${toHex(randomBytes(4))}.zylc`;
+    // 写之前再读一次清单：这期间别人改过（seq 变了）就不覆盖，让用户再试一次
+    if (m.indexSha) {
+      const mid = await drive.findChild(ref.folderId, MANIFEST);
+      const now = mid ? await openManifest(dec.decode(await drive.downloadAny(mid))) : null;
+      if (!now || now.seq !== m.seq) throw new Error(t("相册刚被别人改过，请再试一次"));
+    }
     const ct = await zylc.encrypt(indexJson(index), BlobKind.IndexSnapshot, await sharing.albumWrapKey(ak, m.albumId));
-    await drive.uploadInto(ref.folderId, INDEX, ct, "application/octet-stream");
-    const next: Manifest = { ...m, seq: m.seq + 1, indexSha: toHex(await sha256(ct)), indexSeq: index.seq };
+    await drive.uploadInto(ref.folderId, file, ct, "application/octet-stream");
+    const next: Manifest = { ...m, seq: m.seq + 1, indexSha: toHex(await sha256(ct)), indexSeq: index.seq, indexFile: file };
     await drive.uploadInto(ref.folderId, MANIFEST, enc.encode(await sealManifest(next, me)), "application/json");
     lsSet(seqKey(ref.albumId), String(next.seq));
+    // 只删上一份清单指向的那个文件；别的目录文件只删没被引用、超过一天没改过的
+    // （另一个管理者刚写的新目录不能删）。和 App 一致。
+    try {
+      const old = m.indexSha ? await drive.findChild(ref.folderId, m.indexFile) : null;
+      if (old && m.indexFile !== file) await drive.deleteAny(old);
+      const dayAgo = Date.now() - 86_400_000;
+      for (const [name, id, at] of await drive.listChildren(ref.folderId)) {
+        if (name !== file && name !== m.indexFile && INDEX_NAME.test(name) && at > 0 && at < dayAgo) await drive.deleteAny(id).catch(() => {});
+      }
+    } catch {
+      /* 留着也不影响读取 */
+    }
     return next;
   }
 
@@ -533,7 +607,7 @@ class SharedAlbums {
       const ak = randomBytes(32);
       const owner = await member(me.xPub, me.edPub, acc.stored.email, null, Date.now());
       const keys = { [me.fpHex]: await sharing.sealAlbumKey(ak, albumId, 1, me.xPub, me.fpHex) };
-      const m: Manifest = { albumId, seq: 0, epoch: 1, owner, members: [], keys, indexSha: "", indexSeq: 0, originals };
+      const m: Manifest = { albumId, seq: 0, epoch: 1, owner, members: [], keys, indexSha: "", indexSeq: 0, indexFile: INDEX, originals };
       const ref: AlbumRef = { albumId, acc: acc.key, folderId, name, myRole: null, ownerEmail: acc.stored.email, ownerCode: owner.code, count: 0, addedAt: 0 };
       const shared = await this.itemsFor(acc, items, me, originals);
       if (!shared.length) throw new Error(t("选中的照片里没有可以共享的（只能共享用现在这套密钥加密的照片）"));
@@ -562,6 +636,26 @@ class SharedAlbums {
       await this.writeAlbum(ref, m, me, ak, { name: index.name, seq: index.seq + 1, items: [...index.items, ...added] });
       this.saveRef({ ...ref, count: index.items.length + added.length });
       return added.length;
+    });
+  }
+
+  /** 从相册里删掉照片（主人或管理者）。照片本身还在原来的备份里，只是不再共享。 */
+  removePhotos(albumId: string, ids: string[]): Promise<void> {
+    return this.serial(async () => {
+      const ref = this.ref(albumId);
+      const acc = this.account(ref);
+      const me = await this.identity(acc);
+      const m = await this.loadManifest(ref);
+      if (!signer(m, me.fpHex)) throw new Error(t("你没有管理这个相册的权限"));
+      const ak = await this.albumKey(m, me);
+      const index = await this.readIndex(ref, m, ak);
+      const gone = index.items.filter((i) => ids.includes(i.r));
+      if (!gone.length) return;
+      await this.writeAlbum(ref, m, me, ak, { name: index.name, seq: index.seq + 1, items: index.items.filter((i) => !ids.includes(i.r)) });
+      // 自己网盘里的照片：撤掉成员的读权限（别人的照片撤不了，跳过）
+      const drive = this.sd(acc);
+      for (const x of m.members) for (const i of gone) await revokeItem(drive, i, x.email);
+      this.saveRef({ ...ref, count: index.items.length - gone.length });
     });
   }
 
@@ -600,11 +694,8 @@ class SharedAlbums {
       const who = m.members.find((x) => x.fpHex === fpHex);
       if (!who) return;
       const drive = this.sd(acc);
-      if (canWrite(who.role) !== canWrite(role)) {
-        await drive.revokeEmail(ref.folderId, who.email);
-        await drive.grant(ref.folderId, who.email, canWrite(role));
-      }
       const members = m.members.map((x) => (x.fpHex === fpHex ? { ...x, role } : x));
+      await fixFolder(drive, ref.folderId, who.email, m.members, members);
       if (canWrite(who.role) && !canWrite(role)) {
         await this.rotate(ref, m, me, members);
       } else {
@@ -626,12 +717,13 @@ class SharedAlbums {
       if (!who) return;
       const drive = this.sd(acc);
       const index = await this.readIndex(ref, m, await this.albumKey(m, me));
-      await drive.revokeEmail(ref.folderId, who.email).catch(() => {});
-      // 同一个邮箱可能还以别的身份留在相册里：那样就不撤照片的读权限
-      if (!m.members.some((x) => x.fpHex !== fpHex && x.email.toLowerCase() === who.email.toLowerCase())) {
+      const rest = m.members.filter((x) => x.fpHex !== fpHex);
+      // 同一个邮箱可能还以别的身份留在相册里：文件夹权限按它们里最高的角色给，照片的读权限不撤
+      await fixFolder(drive, ref.folderId, who.email, m.members, rest).catch(() => {});
+      if (!sameEmail(rest, who.email).length) {
         for (const i of index.items) await revokeItem(drive, i, who.email);
       }
-      await this.rotate(ref, m, me, m.members.filter((x) => x.fpHex !== fpHex));
+      await this.rotate(ref, m, me, rest);
     });
   }
 
@@ -679,7 +771,7 @@ class SharedAlbums {
         m = await this.loadManifest(draft);
       } catch (e) {
         if (e instanceof Tampered) throw e;
-        throw new Error(t("读不到这个共享相册。请确认对方已经用你这个账号的名片邀请了你；Google 账号在网页版暂时还不能接收共享。"));
+        throw new Error(t("读不到这个共享相册。请确认对方已经用你这个账号的名片邀请了你。"));
       }
       const mine = m.members.find((x) => x.fpHex === me.fpHex);
       if (!mine) throw new Error(t("这个相册里没有你。请把你这个账号的名片发给对方，让对方邀请你。"));
@@ -719,7 +811,7 @@ class SharedAlbums {
       const m = await this.loadManifest(ref);
       const ak = await this.albumKey(m, await this.identity(acc));
       try {
-        plain = await zylc.decrypt(bytes, await sharing.albumWrapKey(ak, m.albumId));
+        plain = await decryptKind(bytes, await sharing.albumWrapKey(ak, m.albumId), thumb ? BlobKind.Thumbnail : BlobKind.Original);
       } catch {
         return null;
       }
@@ -751,6 +843,21 @@ function joinLink(ref: AlbumRef, ownerCode: string): string {
     folder: ref.folderId, album: ref.albumId, name: ref.name, owner: ref.ownerEmail, code: ownerCode,
   };
   return WEB + "#join=" + b64url(enc.encode(JSON.stringify(o)));
+}
+
+const sameEmail = (list: Member[], email: string) => list.filter((x) => x.email.toLowerCase() === email.toLowerCase());
+
+/** 一个邮箱在共享文件夹上的权限：按这个邮箱下所有身份里最高的角色（没有身份了就撤掉）。 */
+async function fixFolder(drive: SharingDrive, folderId: string, email: string, before: Member[], after: Member[]) {
+  const level = (list: Member[]) => {
+    const mine = sameEmail(list, email);
+    return !mine.length ? 0 : mine.some((x) => canWrite(x.role)) ? 2 : 1;
+  };
+  const was = level(before);
+  const now = level(after);
+  if (was === now) return;
+  await drive.revokeEmail(folderId, email);
+  if (now) await drive.grant(folderId, email, now === 2);
 }
 
 async function grantItem(drive: SharingDrive, i: SharedItem, email: string) {

@@ -67,7 +67,7 @@
   let lastToggled = -1;
   let fileInput = $state<HTMLInputElement>();
 
-  library.loadAll();
+  library.loadAll().then(() => shared.pushDirty());
 
   document.documentElement.lang = htmlLang;
   // 别人发来的共享链接（#card= 名片、#join= 邀请）：转到“共享”页处理，地址栏换回普通页面
@@ -80,6 +80,10 @@
   let sharing = $state<Photo[] | null>(null);
   startServiceWorker();
 
+  // 解锁后把上次没推上去的共享相册列表再推一次
+  $effect(() => {
+    if (library.unlocked) shared.pushDirty();
+  });
   // 第一次发现有加密内容时自动弹出解锁
   $effect(() => {
     if (library.needsUnlock && !library.unlocked && !unlockDismissed) showUnlock = true;
@@ -355,8 +359,8 @@
 <style>
   .shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
   .side {
-    position: sticky; top: 0; height: 100vh; padding: 14px 12px; display: flex; flex-direction: column; gap: 8px;
-    background: var(--bg); border-right: 1px solid var(--border); z-index: 20; overflow-y: auto;
+    position: sticky; top: 0; height: 100vh; height: 100dvh; padding: 14px 12px max(14px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px;
+    background: var(--bg); border-right: 1px solid var(--border); z-index: 20; overflow-y: auto; overscroll-behavior: contain;
   }
   .brand { display: flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 600; padding: 6px 10px 14px; }
   .mark { width: 32px; height: 32px; display: block; }
@@ -396,11 +400,13 @@
   @media (max-width: 860px) {
     .shell { grid-template-columns: 1fr; }
     .side {
-      position: fixed; left: 0; top: 0; width: 280px; transform: translateX(-100%); visibility: hidden;
+      position: fixed; left: 0; top: 0; width: 280px; transform: translateX(-100%); visibility: hidden; z-index: 50; gap: 4px; padding-top: 8px;
       transition: transform 0.26s cubic-bezier(0.2, 0, 0, 1), visibility 0s 0.26s; box-shadow: var(--shadow); background: var(--surface);
     }
     .side.open { transform: none; visibility: visible; transition: transform 0.26s cubic-bezier(0.2, 0, 0, 1); }
-    .drawer-scrim { display: block; position: fixed; inset: 0; z-index: 15; background: rgba(0, 0, 0, 0.35); border: none; animation: zy-fade 0.2s; }
+    .brand { padding: 6px 10px 8px; }
+    nav button { padding: 9px 14px; }
+    .drawer-scrim { display: block; position: fixed; inset: 0; z-index: 45; background: rgba(0, 0, 0, 0.35); border: none; animation: zy-fade 0.2s; }
     .menu { display: inline-grid; }
     .top { padding: 8px 12px; }
     .content { padding: 4px 4px 80px; }

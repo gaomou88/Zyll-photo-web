@@ -73,6 +73,19 @@
       fullErr = (e as Error).message;
     }
   }
+  const pos = $derived(viewing ? items.indexOf(viewing) : -1);
+  function step(d: number) {
+    const it = items[pos + d];
+    if (!it) return;
+    if (full) URL.revokeObjectURL(full.url);
+    view(it);
+  }
+  function onKey(e: KeyboardEvent) {
+    if (!viewing || confirmDelete) return;
+    if (e.key === "Escape") closeView();
+    else if (e.key === "ArrowLeft") step(-1);
+    else if (e.key === "ArrowRight") step(1);
+  }
   function closeView() {
     if (full) URL.revokeObjectURL(full.url);
     full = null;
@@ -96,7 +109,10 @@
   $effect(() => {
     const text = cardText;
     if (!text) return;
-    parseCard(text).then((c) => (parsed = c));
+    parseCard(text).then((c) => {
+      parsed = c;
+      checked = false;
+    });
   });
   async function invite() {
     if (!parsed) return;
@@ -122,7 +138,25 @@
     copied = false;
   }
 
+  /** 改权限；失败时下拉框退回原来的值。 */
+  async function setRole(m: Member, el: HTMLSelectElement) {
+    const old = m.role ?? "viewer";
+    busy = true;
+    note = "";
+    try {
+      await shared.setRole(albumId, m.fpHex, el.value as ShareRole);
+      await reload();
+    } catch (e) {
+      el.value = old;
+      note = (e as Error).message;
+    } finally {
+      busy = false;
+    }
+  }
+
   let confirmRemove = $state<Member | null>(null);
+  let confirmLeave = $state(false);
+  let confirmDelete = $state<SharedItem | null>(null);
   let confirmStop = $state(false);
 </script>
 
@@ -130,7 +164,7 @@
   <div class="row head">
     <button class="icon-btn" onclick={onback} aria-label={t("返回")}><Icon name="back" /></button>
     <h2 class="grow">{ref?.name || t("共享相册")}</h2>
-    {#if data?.canManage}<button class="btn primary" onclick={() => (inviting = true)} disabled={busy}>{t("邀请")}</button>{/if}
+    {#if data?.canManage}<button class="btn primary" onclick={() => (inviting = true)} disabled={busy}>{t("邀请成员")}</button>{/if}
   </div>
   {#if err}<p class="error">{err}</p>{/if}
   {#if note}<p class="muted">{note}</p>{/if}
@@ -160,7 +194,7 @@
         <div class="member">
           <span class="grow"><strong>{m.email}</strong><span class="muted small">{t("安全码")} {m.code}</span></span>
           {#if data.canManage}
-            <select value={m.role} disabled={busy} onchange={(e) => run(() => shared.setRole(albumId, m.fpHex, (e.target as HTMLSelectElement).value as ShareRole))}>
+            <select value={m.role} disabled={busy} onchange={(e) => setRole(m, e.target as HTMLSelectElement)}>
               {#each ROLES as r}<option value={r}>{roleText(r)}</option>{/each}
             </select>
             <button class="btn text" disabled={busy} onclick={() => (confirmRemove = m)}>{t("移除")}</button>
@@ -177,7 +211,7 @@
       {#if ref?.myRole === null}
         <button class="btn danger" disabled={busy} onclick={() => (confirmStop = true)}>{t("停止共享")}</button>
       {:else}
-        <button class="btn" disabled={busy} onclick={() => { shared.leave(albumId); onback(); }}>{t("从列表移除")}</button>
+        <button class="btn" disabled={busy} onclick={() => (confirmLeave = true)}>{t("退出这个相册")}</button>
       {/if}
       {#if copied && !inviting}<span class="muted small">{t("已复制")}</span>{/if}
     </div>
@@ -186,13 +220,18 @@
   {/if}
 </div>
 
+<svelte:window onkeydown={onKey} />
+
 {#if viewing}
   <div class="viewer">
     <div class="bar">
       <button class="icon-btn" onclick={closeView} aria-label={t("关闭")}><Icon name="close" /></button>
       <span class="grow">{viewing.n} · {fmtTime(viewing.t)}</span>
       {#if full}<button class="btn" onclick={() => saveBlob(full!.blob, viewing!.n)}><Icon name="download" size={18} /> {t("下载")}</button>{/if}
+      {#if data?.canManage}<button class="icon-btn" onclick={() => (confirmDelete = viewing)} aria-label={t("删除")} title={t("删除")}><Icon name="trash" /></button>{/if}
     </div>
+    {#if pos > 0}<button class="nav prev" onclick={() => step(-1)} aria-label={t("上一张")}><Icon name="back" /></button>{/if}
+    {#if pos >= 0 && pos < items.length - 1}<button class="nav next" onclick={() => step(1)} aria-label={t("下一张")}><Icon name="back" /></button>{/if}
     <div class="stage">
       {#if full}
         {#if viewing.m.startsWith("video/")}
@@ -237,7 +276,7 @@
         <label class="field">{t("权限")}
           <select bind:value={role} disabled={busy}>{#each ROLES as r}<option value={r}>{roleText(r)}</option>{/each}</select>
         </label>
-        <p class="muted small">{role === "viewer" ? t("只能浏览和下载。") : role === "contributor" ? t("还能往相册里添加照片。") : t("还能删照片、邀请和移除成员、改权限。")}</p>
+        <p class="muted small">{role === "viewer" ? t("只能浏览和下载。") : role === "contributor" ? t("以后还能往相册里添加照片（即将支持）。") : t("还能删照片、邀请和移除成员、改权限。")}</p>
         {#if note}<p class="error small">{note}</p>{/if}
         <div class="actions">
           <button class="btn" onclick={closeInvite} disabled={busy}>{t("取消")}</button>
@@ -256,6 +295,32 @@
       <div class="actions">
         <button class="btn" onclick={() => (confirmRemove = null)}>{t("取消")}</button>
         <button class="btn danger" onclick={() => { const m = confirmRemove!; confirmRemove = null; run(() => shared.removeMember(albumId, m.fpHex), t("已移除")); }}>{t("移除")}</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if confirmLeave}
+  <div class="scrim">
+    <div class="dialog">
+      <h2>{t("退出这个相册？")}</h2>
+      <p>{t("相册会从你的列表里去掉。以后要再加入，需要对方重新发链接。")}</p>
+      <div class="actions">
+        <button class="btn" onclick={() => (confirmLeave = false)}>{t("取消")}</button>
+        <button class="btn danger" onclick={() => { confirmLeave = false; shared.leave(albumId); onback(); }}>{t("退出")}</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if confirmDelete}
+  <div class="scrim">
+    <div class="dialog">
+      <h2>{t("从共享相册里删掉这张？")}</h2>
+      <p>{t("成员以后看不到它。照片本身还留在原来的备份里；别人已经下载过的收不回来。")}</p>
+      <div class="actions">
+        <button class="btn" onclick={() => (confirmDelete = null)}>{t("取消")}</button>
+        <button class="btn danger" onclick={() => { const it = confirmDelete!; confirmDelete = null; closeView(); run(() => shared.removePhotos(albumId, [it.r]), t("已从共享相册删掉")); }}>{t("删除")}</button>
       </div>
     </div>
   </div>
@@ -300,6 +365,10 @@
   .viewer { position: fixed; inset: 0; z-index: 50; background: #000; color: #fff; display: flex; flex-direction: column; }
   .viewer .bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
   .viewer .icon-btn { color: #fff; }
+  .nav { all: unset; cursor: pointer; position: absolute; top: 50%; z-index: 2; width: 44px; height: 44px; margin-top: -22px; display: grid; place-items: center; border-radius: 50%; background: rgba(255, 255, 255, 0.15); color: #fff; }
+  .nav:hover, .nav:focus-visible { background: rgba(255, 255, 255, 0.3); }
+  .nav.prev { left: 12px; }
+  .nav.next { right: 12px; transform: scaleX(-1); }
   .stage { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
   .stage img, .stage video { max-width: 100%; max-height: 100%; object-fit: contain; }
 </style>

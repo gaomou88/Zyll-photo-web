@@ -94,7 +94,7 @@ export class MemoryDrive implements Drive, SharingDrive {
     const base = MemoryDrive.locate(folderId)!.path;
     return [...d.files.values()].find((f) => f.path === (base ? base + "/" : "") + name)?.id ?? null;
   }
-  async listChildren(folderId: string): Promise<[string, string][]> {
+  async listChildren(folderId: string): Promise<[string, string, number][]> {
     const d = this.allowed(folderId, false);
     const base = MemoryDrive.locate(folderId)!.path;
     const out = new Map<string, string>();
@@ -103,7 +103,7 @@ export class MemoryDrive implements Drive, SharingDrive {
       const rest = f.path.slice(base.length + 1).split("/");
       out.set(rest[0]!, rest.length > 1 ? `dir:${d.prefix()}:${base}/${rest[0]}` : f.id);
     }
-    return [...out];
+    return [...out].map(([n, id]): [string, string, number] => [n, id, 0]);
   }
   async downloadAny(id: string) {
     const d = this.allowed(id, false);
