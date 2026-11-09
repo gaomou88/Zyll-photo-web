@@ -45,6 +45,10 @@ Zyll 相册的网页端：在电脑浏览器里查看、上传、下载手机 Zy
    然后 Settings → Pages → Custom domain 填 `photo.zyll.top`，等证书签好后勾上 **Enforce HTTPS**。
    用 Actions 部署时域名只认这里的设置，仓库里不需要 CNAME 文件。
    换域名后浏览器里的登录状态和本地缓存不会跟过来（按域名隔离），用户需要重新连接网盘、输入备份密码。
+   待写清单（`zyll-pending-*`，上传或删除后还没写进网盘目录的改动）也存在旧域名下：切换前先在旧网址打开一次，
+   等它写完（没有“待写入”提示）再切。网页用相对路径（`base: "./"`），换域名不用改构建配置。
+   旧链接靠 GitHub Pages 从 gaomou88.github.io/Zyll-photo-web/ 301 跳到新域名（`#card=`、`#join=` 会保留），
+   所以不要删这个仓库的 Pages，也不要改仓库名。
 
 ## 本地开发
 
