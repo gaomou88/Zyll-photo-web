@@ -1,5 +1,6 @@
 import { createSHA256 } from "hash-wasm";
 import { THUMB_PX } from "./config";
+import { htmlLang, t } from "./i18n";
 
 /** 浏览器里处理照片：内容指纹、拍摄时间、缩略图、HEIC 转码。 */
 
@@ -127,9 +128,9 @@ function frameOfVideo(b: Blob): Promise<ImageBitmap> {
       URL.revokeObjectURL(url);
       v.removeAttribute("src");
       v.load();
-      if (err) reject(err instanceof Error ? err : new Error("无法读取视频"));
+      if (err) reject(err instanceof Error ? err : new Error(t("无法读取视频")));
     };
-    const timer = setTimeout(() => done(new Error("读取视频超时")), 15_000);
+    const timer = setTimeout(() => done(new Error(t("读取视频超时"))), 15_000);
     v.onloadedmetadata = () => {
       v.currentTime = Math.min(1, (v.duration || 0) / 2);
     };
@@ -145,7 +146,7 @@ function frameOfVideo(b: Blob): Promise<ImageBitmap> {
     };
     v.onerror = () => {
       clearTimeout(timer);
-      done(new Error("浏览器不支持这种视频格式"));
+      done(new Error(t("浏览器不支持这种视频格式")));
     };
     v.src = url;
   });
@@ -180,16 +181,16 @@ export function fmtSize(n: number): string {
 }
 
 /** 照片墙的日期标题：今天 / 昨天 / 11月3日 周一 / 2024年5月1日。 */
-export function dayLabel(t: number): string {
-  const d = new Date(t);
+export function dayLabel(ms: number): string {
+  const d = new Date(ms);
   const now = new Date();
   const start = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diff = Math.round((start(now) - start(d)) / 86_400_000);
-  if (diff === 0) return "今天";
-  if (diff === 1) return "昨天";
-  const week = "日一二三四五六"[d.getDay()];
-  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 周${week}`;
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  if (diff === 0) return t("今天");
+  if (diff === 1) return t("昨天");
+  const opts: Intl.DateTimeFormatOptions =
+    d.getFullYear() === now.getFullYear() ? { month: "long", day: "numeric", weekday: "short" } : { year: "numeric", month: "long", day: "numeric" };
+  return new Intl.DateTimeFormat(htmlLang, opts).format(d);
 }
 
 export const dayKey = (t: number) => {
@@ -197,10 +198,8 @@ export const dayKey = (t: number) => {
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 };
 
-export function fmtTime(t: number): string {
-  const d = new Date(t);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`;
+export function fmtTime(ms: number): string {
+  return new Intl.DateTimeFormat(htmlLang, { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(ms));
 }
 
 /** 下载一个 Blob 到本地。 */

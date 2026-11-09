@@ -273,6 +273,22 @@ export class GoogleDrive implements Drive {
     const o = await (await request(acc, url)).json();
     return o.files?.[0]?.id ?? null;
   }
+
+  /** 建可见的“Zyll 相册/”文件夹（和 App 建的一样：根目录下、带 zyllRoot 标记和说明）。 */
+  static async createVisibleRoot(acc: StoredAccount): Promise<string> {
+    const r = await request(acc, `${G_API}/files?fields=id`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: VISIBLE_ROOT,
+        mimeType: G_FOLDER,
+        parents: ["root"],
+        appProperties: { zyllRoot: "1" },
+        description: "Zyll 相册的加密备份。文件名是随机的，内容都是密文。请不要删除或移动这个文件夹。",
+      }),
+    });
+    return (await r.json()).id;
+  }
 }
 
 // ======================= OneDrive =======================

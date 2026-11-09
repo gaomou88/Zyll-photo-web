@@ -1,4 +1,5 @@
 import { TOMBSTONE_MAX, TRASH_IN_INDEX } from "./config";
+import { t } from "./i18n";
 
 /**
  * 网盘备份目录（index.json / vault/index.zylc 的明文），格式见 spec/vault-layout.md。
@@ -49,7 +50,7 @@ export interface IndexDoc {
 
 export class IndexCorrupt extends Error {
   constructor(cause?: unknown) {
-    super("网盘上的备份目录损坏了，请在手机上处理（以手机为准重建）");
+    super(t("网盘上的备份目录损坏了，请在手机上处理（以手机为准重建）"));
     this.cause = cause;
   }
 }
@@ -130,6 +131,8 @@ export interface IndexChange {
   remove?: string[];
   trash?: string[];
   trashDone?: string[];
+  /** 开启加密（网页首次设置时用），只在目录里还没有 mode 时写 */
+  mode?: { enc: boolean; at: number };
 }
 
 export function applyChange(m: Merged, c: IndexChange): Merged {
@@ -148,7 +151,7 @@ export function applyChange(m: Merged, c: IndexChange): Merged {
     trash.delete(i.r);
     if (i.th) trash.delete(i.th);
   }
-  return { ...m, items, deleted, delList, trash };
+  return { ...m, items, deleted, delList, trash, mode: m.mode ?? c.mode ?? null };
 }
 
 /** 生成要上传的目录 JSON。[encrypt] 为 false 时不写加密条目。 */

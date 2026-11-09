@@ -10,6 +10,7 @@
   import UploadDialog from "./components/UploadDialog.svelte";
   import UploadPanel from "./components/UploadPanel.svelte";
   import AppBanner from "./components/AppBanner.svelte";
+  import SiteFooter from "./components/SiteFooter.svelte";
   import { t, htmlLang } from "./lib/i18n";
   import { library, type Photo } from "./lib/library.svelte";
   import { uploads } from "./lib/uploads.svelte";
@@ -109,11 +110,11 @@
   const list = $derived.by((): Photo[] => {
     const all = library.photos;
     if (view === "videos") return all.filter((p) => p.item.m.startsWith("video/"));
-    if (view === "albums" && album !== null) return all.filter((p) => (p.item.a || "未命名") === album);
+    if (view === "albums" && album !== null) return all.filter((p) => (p.item.a || t("未命名")) === album);
     return all;
   });
   const title = $derived(
-    view === "albums" && album !== null ? album : { photos: "照片", albums: "相簿", videos: "视频", shared: "共享", settings: "设置" }[view],
+    view === "albums" && album !== null ? album : { photos: t("照片"), albums: t("相簿"), videos: t("视频"), shared: t("共享"), settings: t("设置") }[view],
   );
   const loading = $derived(library.accounts.some((a) => a.state === "loading"));
   const problems = $derived(library.accounts.filter((a) => a.state === "signin" || a.state === "error" || a.readOnly || a.migrating || a.lostUploads.length));
@@ -149,10 +150,10 @@
       return;
     }
     try {
-      await downloadPhotos(ps, (d, t) => (toast = t > 1 ? `正在下载 ${d} / ${t}` : "正在下载…"));
+      await downloadPhotos(ps, (d, n) => (toast = n > 1 ? t("正在下载 {d} / {n}", { d, n }) : t("正在下载…")));
       toast = "";
     } catch (e) {
-      toast = `下载失败：${(e as Error).message}`;
+      toast = t("下载失败：{msg}", { msg: (e as Error).message });
       setTimeout(() => (toast = ""), 5000);
     }
   }
@@ -172,7 +173,7 @@
       if (viewerIndex !== null && viewerIndex >= list.length) viewerIndex = list.length ? list.length - 1 : null;
       confirmDelete = null;
     } catch (e) {
-      toast = `删除失败：${(e as Error).message}`;
+      toast = t("删除失败：{msg}", { msg: (e as Error).message });
       setTimeout(() => (toast = ""), 6000);
       confirmDelete = null;
     } finally {
@@ -209,10 +210,10 @@
     unlockDismissed = true;
   }
   $effect(() => {
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       if (library.unlocked && autoLock > 0 && !uploads.running && Date.now() - lastActive > autoLock * 60_000) lockNow();
     }, 30_000);
-    return () => clearInterval(t);
+    return () => clearInterval(timer);
   });
 
   function beforeUnload(e: BeforeUnloadEvent) {
@@ -234,43 +235,44 @@
     ondrop={(e) => { e.preventDefault(); dragging = 0; pickFiles(e.dataTransfer?.files); }}
   >
     <aside class="side" class:open={drawer}>
-      <div class="brand"><img class="mark" src="./icon-192.png" alt="" width="30" height="30" /> Zyll 相册</div>
+      <div class="brand"><img class="mark" src="./icon-192.png" alt="" width="30" height="30" /> {t("Zyll 相册")}</div>
       <nav>
-        <button class:active={view === "photos"} onclick={() => go("photos")}><Icon name="photos" /> 照片</button>
-        <button class:active={view === "albums"} onclick={() => go("albums")}><Icon name="albums" /> 相簿</button>
-        <button class:active={view === "videos"} onclick={() => go("videos")}><Icon name="video" /> 视频</button>
-        <button class:active={view === "shared"} onclick={() => go("shared")}><Icon name="shared" /> 共享</button>
+        <button class:active={view === "photos"} onclick={() => go("photos")}><Icon name="photos" /> {t("照片")}</button>
+        <button class:active={view === "albums"} onclick={() => go("albums")}><Icon name="albums" /> {t("相簿")}</button>
+        <button class:active={view === "videos"} onclick={() => go("videos")}><Icon name="video" /> {t("视频")}</button>
+        <button class:active={view === "shared"} onclick={() => go("shared")}><Icon name="shared" /> {t("共享")}</button>
         <hr />
-        <button class:active={view === "settings"} onclick={() => go("settings")}><Icon name="settings" /> 设置</button>
+        <button class:active={view === "settings"} onclick={() => go("settings")}><Icon name="settings" /> {t("设置")}</button>
       </nav>
       <div class="accounts muted">
         {#each library.accounts as a}<div>{a.label}</div>{/each}
       </div>
+      <div class="foot"><SiteFooter /></div>
     </aside>
-    {#if drawer}<button class="drawer-scrim" aria-label="关闭菜单" onclick={() => (drawer = false)}></button>{/if}
+    {#if drawer}<button class="drawer-scrim" aria-label={t("关闭菜单")} onclick={() => (drawer = false)}></button>{/if}
 
     <main>
       <header class="top">
         {#if selected.size}
-          <button class="icon-btn" onclick={() => selected.clear()} aria-label="取消选择"><Icon name="close" /></button>
-          <h1>已选择 {selected.size} 项</h1>
-          <button class="btn" onclick={() => download(selectedPhotos())}><Icon name="download" size={18} /> 下载</button>
-          <button class="btn danger" onclick={() => (confirmDelete = selectedPhotos())}><Icon name="trash" size={18} /> 删除</button>
+          <button class="icon-btn" onclick={() => selected.clear()} aria-label={t("取消选择")}><Icon name="close" /></button>
+          <h1>{t("已选择 {n} 项", { n: selected.size })}</h1>
+          <button class="btn" onclick={() => download(selectedPhotos())}><Icon name="download" size={18} /> {t("下载")}</button>
+          <button class="btn danger" onclick={() => (confirmDelete = selectedPhotos())}><Icon name="trash" size={18} /> {t("删除")}</button>
         {:else}
-          <button class="icon-btn menu" onclick={() => (drawer = true)} aria-label="菜单"><Icon name="menu" /></button>
+          <button class="icon-btn menu" onclick={() => (drawer = true)} aria-label={t("菜单")}><Icon name="menu" /></button>
           {#if view === "albums" && album !== null}
-            <button class="icon-btn" onclick={() => (album = null)} aria-label="返回"><Icon name="back" /></button>
+            <button class="icon-btn" onclick={() => (album = null)} aria-label={t("返回")}><Icon name="back" /></button>
           {/if}
           <h1>{title}</h1>
-          {#if loading}<span class="muted">正在读取…</span>{/if}
+          {#if loading}<span class="muted">{t("正在读取…")}</span>{/if}
           {#if library.hasVault}
             {#if library.unlocked}
-              <button class="icon-btn" onclick={lockNow} title="锁上加密照片" aria-label="锁上"><Icon name="lock" /></button>
+              <button class="icon-btn" onclick={lockNow} title={t("锁上加密照片")} aria-label={t("锁上")}><Icon name="lock" /></button>
             {:else}
-              <button class="btn" onclick={() => (showUnlock = true)}><Icon name="lock" size={18} /> 解锁</button>
+              <button class="btn" onclick={() => (showUnlock = true)}><Icon name="lock" size={18} /> {t("解锁")}</button>
             {/if}
           {/if}
-          <button class="btn primary" onclick={() => fileInput?.click()}><Icon name="upload" size={18} /> 上传</button>
+          <button class="btn primary" onclick={() => fileInput?.click()}><Icon name="upload" size={18} /> {t("上传")}</button>
         {/if}
         <input bind:this={fileInput} type="file" multiple accept="image/*,video/*,.heic,.heif" hidden
           onchange={(e) => { pickFiles((e.target as HTMLInputElement).files); (e.target as HTMLInputElement).value = ""; }} />
@@ -281,11 +283,11 @@
           <div class="notice">
             <Icon name="warn" />
             <span class="grow">
-              {a.label}：{a.state === "signin" ? "登录已过期" : a.state === "error" ? a.error : a.readOnly || (a.migrating ? "手机正在搬迁存储位置，暂时不能在这里上传或删除照片" : `这些照片在手机搬迁存储位置时丢了，请重新上传：${a.lostUploads.join("、")}`)}
+              {a.label}：{a.state === "signin" ? t("登录已过期") : a.state === "error" ? a.error : a.readOnly || (a.migrating ? t("手机正在搬迁存储位置，暂时不能在这里上传或删除照片") : t("这些照片在手机搬迁存储位置时丢了，请重新上传：{names}", { names: a.lostUploads.join(", ") }))}
             </span>
-            {#if a.state === "signin"}<button class="btn" onclick={() => library.reconnect(a).catch((e) => (toast = e.message))}>重新连接</button>{/if}
-            {#if a.state === "error"}<button class="btn" onclick={() => a.load()}>重试</button>{/if}
-            {#if a.rolledBack}<button class="btn" onclick={() => go("settings")}>去处理</button>{/if}
+            {#if a.state === "signin"}<button class="btn" onclick={() => library.reconnect(a).catch((e) => (toast = e.message))}>{t("重新连接")}</button>{/if}
+            {#if a.state === "error"}<button class="btn" onclick={() => a.load()}>{t("重试")}</button>{/if}
+            {#if a.rolledBack}<button class="btn" onclick={() => go("settings")}>{t("去处理")}</button>{/if}
           </div>
         {/each}
 
@@ -296,8 +298,8 @@
         {:else if view === "shared"}
           <div class="placeholder">
             <Icon name="shared" size={40} />
-            <h2>共享相册请在手机上使用</h2>
-            <p class="muted">共享相册已经可以在手机 Zyll 上使用。网页版暂时还不能查看共享相册，之后会支持。</p>
+            <h2>{t("共享相册请在手机上使用")}</h2>
+            <p class="muted">{t("共享相册已经可以在手机 Zyll 上使用。网页版暂时还不能查看共享相册，之后会支持。")}</p>
           </div>
         {:else if view === "albums" && album === null}
           <Albums photos={library.photos} onopen={(name) => (album = name)} />
@@ -308,7 +310,7 @@
             onopen={(i) => (viewerIndex = i)}
             ontoggle={toggle}
             ontoggleday={toggleDay}
-            empty={loading ? "正在读取网盘里的备份…" : view === "videos" ? "还没有视频" : "还没有照片。点右上角“上传”，或把照片拖进这个窗口。"}
+            empty={loading ? t("正在读取网盘里的备份…") : view === "videos" ? t("还没有视频") : t("还没有照片。点右上角“上传”，或把照片拖进这个窗口。")}
           />
         {/if}
         </div>
@@ -317,7 +319,7 @@
     </main>
 
     {#if dragging}
-      <div class="drop"><div><Icon name="upload" size={40} /><p>松开即可上传</p></div></div>
+      <div class="drop"><div><Icon name="upload" size={40} /><p>{t("松开即可上传")}</p></div></div>
     {/if}
   </div>
 {/if}
@@ -389,7 +391,7 @@
   .shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
   .side {
     position: sticky; top: 0; height: 100vh; padding: 14px 12px; display: flex; flex-direction: column; gap: 8px;
-    background: var(--bg); border-right: 1px solid var(--border); z-index: 20;
+    background: var(--bg); border-right: 1px solid var(--border); z-index: 20; overflow-y: auto;
   }
   .brand { display: flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 600; padding: 6px 10px 14px; }
   .mark { width: 32px; height: 32px; display: block; }
@@ -401,6 +403,7 @@
   nav button:hover { background: var(--surface-2); }
   nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   hr { border: none; border-top: 1px solid var(--border); margin: 8px 6px; width: auto; }
+  .foot { padding: 4px 12px 6px; }
   .accounts { margin-top: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
   .accounts div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   main { min-width: 0; }

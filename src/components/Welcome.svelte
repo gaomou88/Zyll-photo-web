@@ -2,7 +2,8 @@
   import Icon from "./Icon.svelte";
   import { configured, cancelSignIn, type DriveKind } from "../lib/auth";
   import { library } from "../lib/library.svelte";
-  import { t } from "../lib/i18n";
+  import { legalPage, t } from "../lib/i18n";
+  import SiteFooter from "./SiteFooter.svelte";
 
   let busy = $state<DriveKind | null>(null);
   let error = $state("");
@@ -35,16 +36,18 @@
       {#if busy}<button class="btn text" onclick={cancelSignIn}>{t("common.cancel")}</button>{/if}
     </div>
     {#if !configured("google") || !configured("onedrive")}
-      <p class="muted">这个网页版还没有配置{!configured("google") ? " Google" : ""}{!configured("google") && !configured("onedrive") ? " 和" : ""}{!configured("onedrive") ? " OneDrive" : ""} 的登录，对应按钮暂不可用。</p>
+      <p class="muted">{t("这个网页版还没有配置 {names} 的登录，对应按钮暂不可用。", { names: [!configured("google") && "Google", !configured("onedrive") && "OneDrive"].filter(Boolean).join(" / ") })}</p>
     {/if}
     {#if error}<p class="error">{error}</p>{/if}
     <p class="muted">{t("welcome.popup")}</p>
-    <p class="muted legal">{t("legal.agree1")}<a href="terms.html" target="_blank" rel="noopener">{t("legal.terms")}</a>{t("legal.and")}<a href="privacy.html" target="_blank" rel="noopener">{t("legal.privacy")}</a></p>
+    <p class="muted legal">{t("legal.agree1")}<a href={legalPage("terms")} target="_blank" rel="noopener">{t("legal.terms")}</a>{t("legal.and")}<a href={legalPage("privacy")} target="_blank" rel="noopener">{t("legal.privacy")}</a></p>
   </div>
+  <div class="foot"><SiteFooter compact /></div>
 </div>
 
 <style>
-  .welcome { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+  .welcome { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 16px; }
+  .foot { width: min(520px, 100%); }
   .card {
     width: min(520px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 24px;
     padding: 32px 28px; display: flex; flex-direction: column; gap: 14px; text-align: center; align-items: center;
