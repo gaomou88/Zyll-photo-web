@@ -281,10 +281,11 @@
           <div class="notice">
             <Icon name="warn" />
             <span class="grow">
-              {a.label}：{a.state === "signin" ? "登录已过期" : a.state === "error" ? a.error : a.readOnly || (a.migrating ? "手机正在搬迁存储位置，暂时不能往这里上传新照片" : `这些照片在手机搬迁存储位置时丢了，请重新上传：${a.lostUploads.join("、")}`)}
+              {a.label}：{a.state === "signin" ? "登录已过期" : a.state === "error" ? a.error : a.readOnly || (a.migrating ? "手机正在搬迁存储位置，暂时不能在这里上传或删除照片" : `这些照片在手机搬迁存储位置时丢了，请重新上传：${a.lostUploads.join("、")}`)}
             </span>
             {#if a.state === "signin"}<button class="btn" onclick={() => library.reconnect(a).catch((e) => (toast = e.message))}>重新连接</button>{/if}
             {#if a.state === "error"}<button class="btn" onclick={() => a.load()}>重试</button>{/if}
+            {#if a.rolledBack}<button class="btn" onclick={() => go("settings")}>去处理</button>{/if}
           </div>
         {/each}
 

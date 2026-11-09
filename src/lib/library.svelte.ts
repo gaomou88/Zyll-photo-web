@@ -69,7 +69,7 @@ async function readMarker(d: Drive): Promise<{ state: string; to: string; at: nu
   }
 }
 
-const MIGRATING = "手机正在搬迁这个网盘的存储位置，搬完前网页版不能往这里上传新照片。";
+const MIGRATING = "手机正在搬迁这个网盘的存储位置，搬完前网页版不能在这里上传或删除照片。";
 
 export class Locked extends Error {
   constructor() {
@@ -126,6 +126,7 @@ export class Account {
   drive: Drive;
   private merged: Merged | null = null;
   private driveSeq = 0;
+  private missingAtLoad = false;
   private verifyTimer: ReturnType<typeof setTimeout> | null = null;
   private encId: string | null = null;
   private queue: Promise<unknown> = Promise.resolve();
@@ -202,7 +203,7 @@ export class Account {
         const id = await step("查找密钥包", () => this.drive.findFile(KEYBUNDLE_PATH));
         this.bundleJson = id ? await step("读取密钥包", async () => text.decode(await this.drive.download(id))) : null;
         const p = await step("读取备份目录", () => this.pull());
-        this.confirm(p.merged);
+        this.missingAtLoad = this.confirm(p.merged);
         this.apply(p);
       });
       this.state = "ready";
@@ -306,27 +307,39 @@ export class Account {
     await this.load();
   }
 
-  /**
-   * 用刚从网盘读到的目录确认待写清单：条目已经在目录里（或者已经被删）就不用再写；
-   * 墓碑对应的条目已经不在目录里就算写进去了。只能用读到的目录确认，不能用自己刚写的。
-   */
-  private confirm(m: Merged) {
-    const has = new Set(m.items.map((i) => i.r));
-    const adds = this.pending();
-    const keepAdds = adds.filter((i) => !has.has(i.r) && !m.deleted.has(i.r));
-    if (keepAdds.length !== adds.length) this.setPending(keepAdds);
-    // 墓碑：条目已经不在目录里、文件也都删掉了才算完成
-    const dels = this.pendingDels();
-    const keepDels = dels.filter((d) => has.has(d.r) || d.f.length > 0);
-    if (keepDels.length !== dels.length) this.setPendingDels(keepDels);
+  private get writtenSeqKey() {
+    return `zyll-wseq-${this.key}`;
   }
 
-  /** 重新读一次目录，确认待写清单（断开账号前用）。 */
-  async recheck() {
-    await this.lock(async () => {
+  /**
+   * 用从网盘读到的目录确认待写清单，返回是否有改动不在目录里（需要补写）。
+   * 只有读到的 seq 比这个浏览器最后写的大（别的设备在我们之后又写过、并且保留了我们的改动），
+   * 才算确认；seq 相等说明还是我们自己写的那份，手机可能正要覆盖，继续等。
+   */
+  private confirm(m: Merged): boolean {
+    const has = new Set(m.items.map((i) => i.r));
+    const addIn = (i: IndexItem) => has.has(i.r) || m.deleted.has(i.r);
+    const delIn = (d: PendingDel) => m.deleted.has(d.r) && !has.has(d.r);
+    const adds = this.pending();
+    const dels = this.pendingDels();
+    const missing = adds.some((i) => !addIn(i)) || dels.some((d) => !delIn(d));
+    if (m.seq > Number(lsGet(this.writtenSeqKey) ?? 0)) {
+      const keepAdds = adds.filter((i) => !addIn(i));
+      if (keepAdds.length !== adds.length) this.setPending(keepAdds);
+      // 墓碑确认了、文件也都删掉了才算完成
+      const keepDels = dels.filter((d) => !delIn(d) || d.f.length > 0);
+      if (keepDels.length !== dels.length) this.setPendingDels(keepDels);
+    }
+    return missing;
+  }
+
+  /** 重新读一次目录，确认待写清单；返回是否有改动不在目录里。 */
+  async recheck(): Promise<boolean> {
+    return this.lock(async () => {
       const p = await this.pull();
-      this.confirm(p.merged);
+      const missing = this.confirm(p.merged);
       this.apply(p);
+      return missing;
     });
   }
 
@@ -365,24 +378,36 @@ export class Account {
         await this.drive.upload(INDEX_PLAIN, bytesSource(data, "application/octet-stream"), { replace: true });
       }
       lsSet(this.seqKey, String(seq));
+      lsSet(this.writtenSeqKey, String(seq));
       this.apply({ merged: { ...m, seq, hasSeq: true }, encId: encrypt ? (p.encId ?? "new") : p.encId, plainId: p.plainId, extra: p.extra });
       if (verify) this.scheduleVerify();
     });
   }
 
-  /** 写完隔几秒再读一次目录，确认自己写的没被别的设备覆盖；没看到就补写（最多补几次，之后等下次打开页面）。 */
-  private scheduleVerify(attempt = 0) {
+  /**
+   * 写完后隔一段时间再读目录（10 秒、1 分钟、3 分钟、10 分钟）：手机传目录可能要几十秒，
+   * 看到改动不在目录里就立刻补写；都在但还没等到别的设备确认就接着等。之后交给下次打开页面。
+   */
+  /** 账号断开时停掉复查。 */
+  dispose() {
     if (this.verifyTimer) clearTimeout(this.verifyTimer);
-    if (attempt >= 3) return;
+    this.verifyTimer = null;
+  }
+
+  private scheduleVerify(step = 0) {
+    const delays = [10_000, 60_000, 180_000, 600_000];
+    if (this.verifyTimer) clearTimeout(this.verifyTimer);
+    this.verifyTimer = null;
+    if (step >= delays.length || !this.unconfirmed) return;
     this.verifyTimer = setTimeout(() => {
       this.verifyTimer = null;
       this.recheck()
-        .then(() => {
-          const lost = this.pending().length || this.pendingDels().some((d) => this.items.some((i) => i.r === d.r));
-          if (lost && !this.readOnly) return this.commit({}, false).then(() => this.scheduleVerify(attempt + 1));
+        .then(async (missing) => {
+          if (missing && !this.readOnly) await this.commit({}, false);
+          this.scheduleVerify(step + 1);
         })
-        .catch(() => {});
-    }, 10_000);
+        .catch(() => this.scheduleVerify(step + 1));
+    }, delays[step]);
   }
 
   // ---------- 上传 ----------
@@ -417,7 +442,10 @@ export class Account {
     if (!this.unconfirmed || this.readOnly) return;
     try {
       await this.dropMissing();
-      await this.commit({});
+      // 目录里缺了才补写；都在只是还没确认的，接着复查
+      if (this.missingAtLoad) await this.commit({});
+      else this.scheduleVerify(1);
+      this.missingAtLoad = false;
       await this.finishDeletes();
     } catch {
       /* 下次再试 */
@@ -475,7 +503,7 @@ export class Account {
   }
 
   hasHash(h: string) {
-    return this.items.some((i) => i.h === h);
+    return (this.merged?.items ?? []).some((i) => i.h === h);
   }
 
   /**
@@ -529,7 +557,13 @@ export class Account {
 
   /** 从网盘永久删除：先在目录里写墓碑（别的设备据此删除记录），再删文件；删不掉的留给手机接着删。 */
   async remove(list: IndexItem[]) {
+    // 只删真正在备份目录里的条目（加密时明文目录多出来的条目只是显示，不能据此删文件）
+    const own = new Set((this.merged?.items ?? []).map((i) => i.r));
+    list = list.filter((i) => own.has(i.r));
     if (!list.length) return;
+    if (this.readOnly) throw new Error(this.readOnly);
+    // 搬迁中不删：删掉旧位置的文件，新位置还会留着复制过去的那份（和 App 一致）
+    await this.checkMarker();
     // 先记进本机的待确认墓碑：目录被别的设备覆盖掉时，下次写目录会再带上
     const dels = this.pendingDels();
     const added = list.filter((i) => !dels.some((d) => d.r === i.r)).map((i) => ({ r: i.r, f: [i.r, i.th].filter(Boolean) }));
@@ -547,7 +581,7 @@ export class Account {
   /** 删掉已经写进墓碑的文件；删不掉的留在 trash 里给手机接着删。 */
   private async finishDeletes() {
     const files = this.pendingDels().flatMap((d) => d.f);
-    if (!files.length || this.readOnly) return;
+    if (!files.length || this.readOnly || this.migrating) return;
     const done: string[] = [];
     for (const id of files) {
       try {
@@ -695,11 +729,15 @@ class Library {
     if (!force && acc.unconfirmed) {
       if (acc.state !== "ready" || acc.readOnly) throw new Error(`${acc.label} 还有 ${acc.unconfirmed} 项改动没写进网盘目录。`);
       await acc.flushPending();
-      await acc.recheck().catch(() => {});
-      if (acc.pendingAddCount) throw new Error(`${acc.label} 还有 ${acc.pendingAddCount} 张刚上传的照片没确认写进网盘目录，现在断开，这些照片在手机上就看不到了。`);
+      const missing = await acc.recheck().catch(() => true);
+      if (!acc.unconfirmed) {
+        /* 都确认了，可以断开 */
+      } else if (missing) throw new Error(`${acc.label} 还有 ${acc.unconfirmed} 项改动没写进网盘目录，现在断开，刚上传的照片在手机上会看不到，删除的照片也可能回来。`);
+      else throw new Error(`${acc.label} 刚才的改动已经写进网盘目录，但还没等到手机确认。手机如果正好在同时写目录，可能会把它们覆盖掉，过几分钟再断开更稳妥。`);
     }
     removeAccount(acc.key);
-    for (const k of [`zyll-pending-${acc.key}`, `zyll-pdel-${acc.key}`]) {
+    acc.dispose();
+    for (const k of [`zyll-pending-${acc.key}`, `zyll-pdel-${acc.key}`, `zyll-wseq-${acc.key}`]) {
       try {
         localStorage.removeItem(k);
       } catch {
