@@ -384,6 +384,8 @@ class SharedAlbums {
     const raced = await read();
     if (raced) return raced;
     await acc.drive.upload(IDENTITY_PATH, { size: ct.length, mime: "application/octet-stream", read: async (a, b) => ct.slice(a, b) }, { replace: true });
+    // 网盘的列表有时稍晚才看得到刚写的文件：隔一会儿再读回来（和 App 一样等 2.5 秒）
+    await new Promise((r) => setTimeout(r, 2500));
     return (await read()) ?? fresh;
   }
 
@@ -654,9 +656,38 @@ class SharedAlbums {
       await this.writeAlbum(ref, m, me, ak, { name: index.name, seq: index.seq + 1, items: index.items.filter((i) => !ids.includes(i.r)) });
       // 自己网盘里的照片：撤掉成员的读权限（别人的照片撤不了，跳过）
       const drive = this.sd(acc);
-      for (const x of m.members) for (const i of gone) await revokeItem(drive, i, x.email);
+      const keep = await this.sharedElsewhere(acc, albumId);
+      for (const x of m.members) for (const i of gone) await revokeItem(drive, i, x.email, keep);
       this.saveRef({ ...ref, count: index.items.length - gone.length });
     });
+  }
+
+  /**
+   * 照片的读权限按“文件 + 邮箱”给，不分相册：撤之前看这个账号管理的其他共享相册，
+   * 照片还在那边、这个邮箱也还是那边的成员，就不撤。有相册读不出来时一律不撤（宁可多留）。
+   */
+  private async sharedElsewhere(acc: Account, albumId: string): Promise<Keep> {
+    const me = await this.identity(acc);
+    const byEmail = new Map<string, Set<string>>();
+    for (const ref of this.albums) {
+      if (ref.acc !== acc.key || ref.albumId === albumId || (ref.myRole !== null && ref.myRole !== "manager")) continue;
+      try {
+        const m = await this.loadManifest(ref);
+        const index = await this.readIndex(ref, m, await this.albumKey(m, me));
+        for (const x of m.members) {
+          const e = x.email.toLowerCase();
+          const set = byEmail.get(e) ?? new Set<string>();
+          for (const i of index.items) {
+            set.add(i.r);
+            if (i.th) set.add(i.th);
+          }
+          byEmail.set(e, set);
+        }
+      } catch {
+        return () => true;
+      }
+    }
+    return (fileId, email) => !!byEmail.get(email.toLowerCase())?.has(fileId);
   }
 
   // ---------- 成员管理 ----------
@@ -721,7 +752,8 @@ class SharedAlbums {
       // 同一个邮箱可能还以别的身份留在相册里：文件夹权限按它们里最高的角色给，照片的读权限不撤
       await fixFolder(drive, ref.folderId, who.email, m.members, rest).catch(() => {});
       if (!sameEmail(rest, who.email).length) {
-        for (const i of index.items) await revokeItem(drive, i, who.email);
+        const keep = await this.sharedElsewhere(acc, albumId);
+        for (const i of index.items) await revokeItem(drive, i, who.email, keep);
       }
       await this.rotate(ref, m, me, rest);
     });
@@ -747,7 +779,8 @@ class SharedAlbums {
       const m = await this.loadManifest(ref);
       const index = await this.readIndex(ref, m, await this.albumKey(m, me));
       const drive = this.sd(acc);
-      for (const x of m.members) for (const i of index.items) await revokeItem(drive, i, x.email);
+      const keep = await this.sharedElsewhere(acc, albumId);
+      for (const x of m.members) for (const i of index.items) await revokeItem(drive, i, x.email, keep);
       await drive.deleteAny(ref.folderId);
       this.dropRef(albumId);
     });
@@ -866,10 +899,13 @@ async function grantItem(drive: SharingDrive, i: SharedItem, email: string) {
   if (i.th) await drive.grant(i.th, email, false);
 }
 
-async function revokeItem(drive: SharingDrive, i: SharedItem, email: string) {
-  await drive.revokeEmail(i.r, email).catch(() => {});
-  if (i.th) await drive.revokeEmail(i.th, email).catch(() => {});
+/** 撤一张照片对 [email] 的读权限；[keep] 说某个文件在别的相册里还共享给这个人时跳过。 */
+async function revokeItem(drive: SharingDrive, i: SharedItem, email: string, keep: Keep) {
+  if (!keep(i.r, email)) await drive.revokeEmail(i.r, email).catch(() => {});
+  if (i.th && !keep(i.th, email)) await drive.revokeEmail(i.th, email).catch(() => {});
 }
+
+type Keep = (fileId: string, email: string) => boolean;
 
 export function problemText(p: SharingProblem): string {
   switch (p) {
