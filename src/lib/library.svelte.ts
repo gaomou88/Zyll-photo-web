@@ -304,6 +304,7 @@ export class Account {
   /** 网盘目录比本机见过的旧，用户确认是手机上操作的：以网盘为准，解除只读。 */
   async trustDrive() {
     lsSet(this.seqKey, String(this.driveSeq));
+    lsSet(this.writtenSeqKey, String(this.driveSeq));
     await this.load();
   }
 
