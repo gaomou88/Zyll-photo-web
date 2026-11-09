@@ -25,6 +25,8 @@
   let motionUrl = $state<string | null>(null);
   let motionBusy = $state(false);
   let motionError = $state("");
+  /** 视频来自实况照片配对的 MOV 时，那个 MOV 的文件名（播放失败时提示下载它） */
+  let motionFrom = $state<string | null>(null);
 
   $effect(() => {
     const p = photo;
@@ -37,6 +39,33 @@
     motionUrl = null;
     motionError = "";
     motionBusy = false;
+    motionFrom = null;
+    // 原图（大图本来就要下载）；动态视频从它里面切
+    let gotRaw!: (b: Blob) => void;
+    let noRaw!: (e: unknown) => void;
+    const rawP = new Promise<Blob>((res, rej) => ((gotRaw = res), (noRaw = rej)));
+    rawP.catch(() => {});
+    const live = p.live && p.live.acc.canOpen(p.live.item) ? p.live : null;
+    const fromLive = live
+      ? async () => {
+          const b = new Blob([await live.acc.original(live.item, ctl.signal)], { type: "video/mp4" });
+          motionFrom = live.item.n;
+          return b;
+        }
+      : null;
+    const fromRaw = async (raw: Blob) => {
+      const found = mayHaveMotion(p.item.m, p.item.n) ? await findMotionVideo(blobReader(raw), raw.size, true).catch(() => null) : null;
+      return found ? raw.slice(found.offset, found.offset + found.length, "video/mp4") : null;
+    };
+    // 照片墙上已经有标记（目录里的 mo、实况配对）：按钮先显示，点了再找视频，不用等原图下载完
+    if (!p.item.m.startsWith("video/") && (p.motion || live)) {
+      motion = async () => {
+        const v = await fromRaw(await rawP);
+        if (v) return v;
+        if (fromLive) return fromLive();
+        throw new Error("这张照片里没找到动态视频");
+      };
+    }
     // 先显示缩略图（用局部变量判断，不读 url，避免它成为这个 effect 的依赖）
     const thumb = cachedThumb(p);
     url = thumb;
@@ -62,17 +91,19 @@
           return;
         }
         const raw = await p.acc.original(p.item, ctl.signal);
+        gotRaw(raw);
         const b = isHeicItem(p.item) ? await heicToJpeg(raw) : raw;
         if (cancelled) return;
         url = made = URL.createObjectURL(b);
         kind = "image";
-        // 动态照片：视频就嵌在原图里，切出来就能播；实况照片用配对的 MOV
-        const found = mayHaveMotion(p.item.m, p.item.n) ? await findMotionVideo(blobReader(raw), raw.size, true).catch(() => null) : null;
-        if (cancelled) return;
-        const live = p.live;
-        if (found) motion = async () => raw.slice(found.offset, found.offset + found.length, "video/mp4");
-        else if (live && live.acc.canOpen(live.item)) motion = async () => new Blob([await live.acc.original(live.item, ctl.signal)], { type: "video/mp4" });
+        // 没有标记的照片：原图到手后按内容找一次，找到了才显示按钮
+        if (!motion) {
+          const v = await fromRaw(raw);
+          if (cancelled) return;
+          if (v) motion = async () => v;
+        }
       } catch (e) {
+        noRaw(e);
         if (cancelled) return;
         error = (e as Error).message;
         p.acc.noteError(e);
@@ -165,7 +196,11 @@
         <video
           class="motion" src={motionUrl} autoplay playsinline
           onended={() => (motionUrl = null)}
-          onerror={() => { motionUrl = null; motionError = "这个浏览器播放不了这段视频，可以下载原图在手机上看"; }}
+          onclick={() => (motionUrl = null)}
+          onerror={() => {
+            motionUrl = null;
+            motionError = motionFrom ? `这个浏览器播放不了这段视频，可以下载 ${motionFrom} 在手机上看` : "这个浏览器播放不了这段视频，可以下载原图在手机上看";
+          }}
         ></video>
       {/if}
       {#if motionError && !error}
