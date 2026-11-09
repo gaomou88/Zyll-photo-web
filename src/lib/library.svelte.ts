@@ -205,6 +205,8 @@ export class Account {
     let hidden: GoogleDrive | null = null;
     await this.lock(async () => {
       if (this.drive instanceof GoogleDrive) await this.resolveGoogleRoot();
+      // 手机正在搬存储位置：等它搬完再设置
+      await this.checkMarker();
       // 再确认一次网盘里确实还是空的（防止手机刚好同时在建）
       await this.assertEmpty();
       let json: string | null = null;
@@ -221,11 +223,11 @@ export class Account {
         const id = (await GoogleDrive.findVisibleRoot(this.stored)) ?? (await GoogleDrive.createVisibleRoot(this.stored));
         const visibleDrive = new GoogleDrive(this.stored, id);
         // 以前用过的文件夹里可能留着旧标记（比如 moved → hidden），和 App 的 beginMove 一样先删掉
-        const old = await visibleDrive.findFile(["storage.json"]);
-        if (old) await visibleDrive.delete(old);
         this.drive = visibleDrive;
         this.where = t("Google 网盘 · 我的云端硬盘/{folder}", { folder: VISIBLE_ROOT });
         await this.assertEmpty();
+        const old = await visibleDrive.findFile(["storage.json"]);
+        if (old) await visibleDrive.delete(old);
       }
       if (json) {
         await this.drive.upload(KEYBUNDLE_PATH, bytesSource(utf8.encode(json), "application/json"), { replace: true });
