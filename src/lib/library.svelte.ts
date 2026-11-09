@@ -57,13 +57,13 @@ async function step<T>(label: string, job: () => Promise<T>): Promise<T> {
 }
 
 /** 存放位置根目录的 storage.json（spec/sharing.md 第 7 节）。 */
-async function readMarker(d: Drive): Promise<{ state: string; to: string } | null> {
+async function readMarker(d: Drive): Promise<{ state: string; to: string; at: number } | null> {
   const id = await d.findFile(["storage.json"]);
   if (!id) return null;
   try {
     const o = JSON.parse(text.decode(await d.download(id)));
     if (o?.format !== "zyll-storage") return null;
-    return { state: String(o.state ?? ""), to: String(o.to ?? "") };
+    return { state: String(o.state ?? ""), to: String(o.to ?? ""), at: Number(o.at) || 0 };
   } catch {
     return null;
   }
@@ -112,6 +112,9 @@ export class Account {
   rolledBack = $state(false);
   /** 手机正在搬迁存储位置：不能开始新的上传，已经传完的照常写进目录 */
   migrating = $state(false);
+  /** 搬迁标记超过 3 天没更新（搬的手机可能不在了），可以让用户选择不再等它 */
+  migrationStale = $state(false);
+  private markerAt = 0;
   /** 搬迁后找不到了、需要重新上传的文件名 */
   lostUploads = $state<string[]>([]);
   items = $state.raw<IndexItem[]>([]);
@@ -286,9 +289,7 @@ export class Account {
       this.rolledBack = true;
       this.readOnly = "网盘上的备份目录比这个浏览器上次看到的旧（手机选了“以网盘为准”，或者被还原过），暂时只能浏览。确认是手机上操作的，可以在设置里点“以网盘为准”。";
     }
-    const marker = await readMarker(this.drive);
-    this.migrating = marker?.state === "migrating";
-    if (marker?.state === "moved") this.readOnly = "这个库已经搬到别的位置，请刷新页面。";
+    this.noteMarker(await readMarker(this.drive));
     return { merged, encId, plainId, extra };
   }
 
@@ -425,11 +426,35 @@ export class Account {
 
   /** 网盘上的存储位置标记：手机开始搬迁或已经搬走，就不再开始新的上传。 */
   private async checkMarker() {
-    const marker = await readMarker(this.drive);
-    this.migrating = marker?.state === "migrating";
-    if (marker?.state === "moved") this.readOnly = "这个库已经搬到别的位置，请刷新页面。";
+    this.noteMarker(await readMarker(this.drive));
     if (this.readOnly) throw new Error(this.readOnly);
     if (this.migrating) throw new Error(MIGRATING);
+  }
+
+  private get ignoreKey() {
+    return `zyll-ignore-migrating-${this.key}`;
+  }
+
+  /**
+   * 记下存储位置标记：moved 就只读；migrating 就不开始新上传。
+   * 搬的手机每 10 分钟刷新 at，超过 3 天没变时允许用户“不再等它”（只认这一份 at，变了就重新等）。
+   */
+  private noteMarker(marker: { state: string; at: number } | null) {
+    if (marker?.state === "moved") this.readOnly = "这个库已经搬到别的位置，请刷新页面。";
+    const mig = marker?.state === "migrating";
+    this.markerAt = mig ? marker!.at : 0;
+    const ignored = mig && marker!.at > 0 && lsGet(this.ignoreKey) === String(marker!.at);
+    this.migrating = mig && !ignored;
+    this.migrationStale = this.migrating && marker!.at > 0 && Date.now() - marker!.at > 3 * 86_400_000;
+    if (!mig) lsSet(this.ignoreKey, null);
+  }
+
+  /** 用户确认不再等那台搬迁中断的手机。 */
+  stopWaitingMigration() {
+    if (!this.markerAt) return;
+    lsSet(this.ignoreKey, String(this.markerAt));
+    this.migrating = false;
+    this.migrationStale = false;
   }
 
   /** 补写前确认待写清单里的文件还在（搬迁后旧位置的文件会被清理掉），找不到的不写，记下来提示用户重新上传。 */
