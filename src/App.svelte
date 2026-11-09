@@ -217,7 +217,7 @@
     ondrop={(e) => { e.preventDefault(); dragging = 0; pickFiles(e.dataTransfer?.files); }}
   >
     <aside class="side" class:open={drawer}>
-      <div class="brand"><span class="mark"><Icon name="photos" size={20} /></span> Zyll 相册</div>
+      <div class="brand"><img class="mark" src="./icon-192.png" alt="" width="30" height="30" /> Zyll 相册</div>
       <nav>
         <button class:active={view === "photos"} onclick={() => go("photos")}><Icon name="photos" /> 照片</button>
         <button class:active={view === "albums"} onclick={() => go("albums")}><Icon name="albums" /> 相簿</button>
@@ -367,7 +367,7 @@
     background: var(--bg); border-right: 1px solid var(--border); z-index: 20;
   }
   .brand { display: flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 600; padding: 6px 10px 14px; }
-  .mark { width: 34px; height: 34px; border-radius: 11px; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; }
+  .mark { width: 32px; height: 32px; display: block; }
   nav { display: flex; flex-direction: column; gap: 2px; }
   nav button {
     display: flex; align-items: center; gap: 14px; padding: 10px 14px; border: none; border-radius: 999px;
