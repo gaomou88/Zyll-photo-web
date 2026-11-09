@@ -11,6 +11,9 @@
   import UploadPanel from "./components/UploadPanel.svelte";
   import AppBanner from "./components/AppBanner.svelte";
   import SiteFooter from "./components/SiteFooter.svelte";
+  import Shared from "./components/Shared.svelte";
+  import ShareDialog from "./components/ShareDialog.svelte";
+  import { shared } from "./lib/sharing.svelte";
   import { t, htmlLang } from "./lib/i18n";
   import { library, type Photo } from "./lib/library.svelte";
   import { uploads } from "./lib/uploads.svelte";
@@ -40,7 +43,6 @@
   let view = $state<View>(initial.view);
   let album = $state<string | null>(initial.album);
   $effect(() => {
-    if (shareLink) return; // 共享链接弹框开着时保留地址栏里的链接
     const want = view === "photos" ? "" : `#/${view}${view === "albums" && album !== null ? "/" + encodeURIComponent(album) : ""}`;
     if (location.hash !== want && !(want === "" && location.hash === "")) {
       history.pushState(null, "", location.pathname + location.search + want);
@@ -68,35 +70,14 @@
   library.loadAll();
 
   document.documentElement.lang = htmlLang;
-  // 手机发来的共享链接（#card= 名片、#join= 邀请）：App 没有注册网址，要复制链接到 App 里粘贴。
-  // 弹框关掉之前不动地址栏，方便用户自己再复制。
-  let shareLink = $state<{ kind: "card" | "join"; who: string; name: string; url: string } | null>(null);
-  let copied = $state("");
-  {
-    const m = /^#(card|join)=([A-Za-z0-9_-]+)$/.exec(location.hash);
-    if (m) {
-      try {
-        const b64 = m[2]!.replace(/-/g, "+").replace(/_/g, "/");
-        const o = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64 + "===".slice((b64.length + 3) % 4)), (c) => c.charCodeAt(0))));
-        shareLink = { kind: m[1] as "card" | "join", who: String(o.email ?? o.owner ?? ""), name: String(o.name ?? ""), url: location.href };
-      } catch {
-        shareLink = null;
-      }
-    }
+  // 别人发来的共享链接（#card= 名片、#join= 邀请）：转到“共享”页处理，地址栏换回普通页面
+  let incoming = $state<string | null>(null);
+  if (/^#(card|join)=[A-Za-z0-9_-]+$/.test(location.hash)) {
+    incoming = location.href;
+    view = "shared";
+    history.replaceState(null, "", location.pathname + location.search + "#/shared");
   }
-  async function copyShare() {
-    try {
-      await navigator.clipboard.writeText(shareLink!.url);
-      copied = t("share.copied");
-    } catch {
-      copied = t("share.copyFail");
-    }
-  }
-  function closeShare() {
-    shareLink = null;
-    copied = "";
-    history.replaceState(null, "", location.pathname + location.search);
-  }
+  let sharing = $state<Photo[] | null>(null);
   startServiceWorker();
 
   // 第一次发现有加密内容时自动弹出解锁
@@ -206,6 +187,7 @@
     clearStreams();
     clearThumbs();
     viewerIndex = null;
+    shared.forget();
     library.lock();
     unlockDismissed = true;
   }
@@ -256,6 +238,7 @@
         {#if selected.size}
           <button class="icon-btn" onclick={() => selected.clear()} aria-label={t("取消选择")}><Icon name="close" /></button>
           <h1>{t("已选择 {n} 项", { n: selected.size })}</h1>
+          <button class="btn" onclick={() => (sharing = selectedPhotos())}><Icon name="shared" size={18} /> {t("共享")}</button>
           <button class="btn" onclick={() => download(selectedPhotos())}><Icon name="download" size={18} /> {t("下载")}</button>
           <button class="btn danger" onclick={() => (confirmDelete = selectedPhotos())}><Icon name="trash" size={18} /> {t("删除")}</button>
         {:else}
@@ -296,11 +279,7 @@
         {#if view === "settings"}
           <Settings bind:autoLock onlock={lockNow} onunlock={() => (showUnlock = true)} />
         {:else if view === "shared"}
-          <div class="placeholder">
-            <Icon name="shared" size={40} />
-            <h2>{t("共享相册请在手机上使用")}</h2>
-            <p class="muted">{t("共享相册已经可以在手机 Zyll 上使用。网页版暂时还不能查看共享相册，之后会支持。")}</p>
-          </div>
+          <Shared {incoming} onunlock={() => (showUnlock = true)} />
         {:else if view === "albums" && album === null}
           <Albums photos={library.photos} onopen={(name) => (album = name)} />
         {:else}
@@ -357,26 +336,12 @@
   </div>
 {/if}
 
-{#if shareLink}
-  <div class="scrim">
-    <div class="dialog">
-      <h2>{shareLink.kind === "join" ? t("share.joinTitle") : t("share.cardTitle")}</h2>
-      {#if shareLink.kind === "join"}
-        <p>{t("share.joinText", { who: shareLink.who || t("share.someone"), name: shareLink.name ? ` “${shareLink.name}”` : "" })}</p>
-        <p>{t("share.joinSteps")}</p>
-      {:else}
-        <p>{t("share.cardText", { who: shareLink.who || t("share.someone") })}</p>
-        <p>{t("share.cardSteps")}</p>
-      {/if}
-      <div class="link">{shareLink.url}</div>
-      {#if copied}<p class="muted">{copied}</p>{/if}
-      <p class="muted">{t("share.webNote")} {t("share.install")}</p>
-      <div class="actions">
-        <button class="btn" onclick={closeShare}>{t("common.close")}</button>
-        <button class="btn primary" onclick={copyShare}>{t("share.copy")}</button>
-      </div>
-    </div>
-  </div>
+{#if sharing}
+  <ShareDialog
+    photos={sharing}
+    onclose={() => (sharing = null)}
+    ondone={(_, msg) => { sharing = null; selected.clear(); toast = msg; go("shared"); }}
+  />
 {/if}
 
 {#if showUnlock}
@@ -415,9 +380,6 @@
   .menu { display: none; }
   .content { padding: 4px 20px 80px; display: flex; flex-direction: column; gap: 12px; }
   .grow { flex: 1; }
-  .placeholder { text-align: center; padding: 72px 16px; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 10px; }
-  .placeholder h2 { margin: 0; color: var(--text); font-size: 18px; }
-  .placeholder p { max-width: 420px; margin: 0; }
   .drop {
     position: fixed; inset: 0; z-index: 60; background: color-mix(in srgb, var(--accent) 22%, transparent);
     display: grid; place-items: center; pointer-events: none; border: 3px dashed var(--accent);
@@ -425,7 +387,6 @@
   .drop div { background: var(--surface); padding: 24px 36px; border-radius: 20px; text-align: center; color: var(--accent); display: flex; flex-direction: column; align-items: center; }
   .drop p { margin: 8px 0 0; font-weight: 500; }
   .view { display: flex; flex-direction: column; gap: 12px; animation: zy-rise 0.22s cubic-bezier(0.2, 0, 0, 1); }
-  .link { font: 12px/1.5 ui-monospace, monospace; word-break: break-all; user-select: all; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; max-height: 96px; overflow: auto; }
   .toast { animation: zy-rise 0.2s cubic-bezier(0.2, 0, 0, 1);
     position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 70; background: var(--text); color: var(--bg);
     padding: 10px 18px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow); max-width: calc(100vw - 32px);

@@ -43,6 +43,28 @@ export interface Drive {
   quota(): Promise<Quota>;
 }
 
+/**
+ * 共享相册要用的网盘操作（和 App 的 SharingDrive 一致）。文件夹路径相对于库根目录；
+ * 带 Any 的方法也能读写别人共享给自己的文件（OneDrive 的 id 形如“驱动器id!编号”）。
+ */
+export interface SharingDrive {
+  ensureFolder(path: string[]): Promise<string>;
+  /** 读文件开头 [n] 字节（ZYLC 文件头）。 */
+  head(id: string, n: number): Promise<Uint8Array>;
+  /** 给 [email] 读或写权限，不发通知邮件。 */
+  grant(id: string, email: string, write: boolean): Promise<void>;
+  revokeEmail(id: string, email: string): Promise<void>;
+  findChild(folderId: string, name: string): Promise<string | null>;
+  /** [名字, id] 列表。 */
+  listChildren(folderId: string): Promise<[string, string][]>;
+  downloadAny(id: string): Promise<Uint8Array>;
+  /** 放进文件夹，同名就覆盖；返回文件 id。 */
+  uploadInto(folderId: string, name: string, data: Uint8Array, mime: string): Promise<string>;
+  deleteAny(id: string): Promise<void>;
+}
+
+export const isSharingDrive = (d: unknown): d is SharingDrive => !!d && typeof (d as SharingDrive).grant === "function";
+
 export class HttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -266,6 +288,74 @@ export class GoogleDrive implements Drive {
     return { total: q.limit ? Number(q.limit) : undefined, used: q.usage ? Number(q.usage) : undefined };
   }
 
+  // ---------- 共享相册（spec/sharing.md） ----------
+
+  async ensureFolder(path: string[]): Promise<string> {
+    return (await this.folderId(path, true))!;
+  }
+
+  async head(id: string, n: number): Promise<Uint8Array> {
+    return this.download(id, [0, n]);
+  }
+
+  async grant(id: string, email: string, write: boolean): Promise<void> {
+    await request(this.account, `${G_API}/files/${id}/permissions?sendNotificationEmail=false&fields=id`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "user", role: write ? "writer" : "reader", emailAddress: email }),
+    });
+  }
+
+  async revokeEmail(id: string, email: string): Promise<void> {
+    const o = await (await request(this.account, `${G_API}/files/${id}/permissions?fields=permissions(id,emailAddress,role)`)).json();
+    for (const p of (o.permissions ?? []) as { id: string; emailAddress?: string; role?: string }[]) {
+      if (p.role === "owner" || (p.emailAddress ?? "").toLowerCase() !== email.toLowerCase()) continue;
+      await request(this.account, `${G_API}/files/${id}/permissions/${p.id}`, { method: "DELETE" }, (s) => (s >= 200 && s < 300) || s === 404);
+    }
+  }
+
+  async findChild(folderId: string, name: string): Promise<string | null> {
+    const q = `name = '${gq(name)}' and '${folderId}' in parents and trashed = false`;
+    const o = await (await request(this.account, `${G_API}/files?spaces=drive&orderBy=modifiedTime%20desc&fields=files(id)&q=${encodeURIComponent(q)}`)).json();
+    return o.files?.[0]?.id ?? null;
+  }
+
+  async listChildren(folderId: string): Promise<[string, string][]> {
+    const q = `'${folderId}' in parents and trashed = false`;
+    const out: [string, string][] = [];
+    let page: string | undefined;
+    do {
+      const url = `${G_API}/files?spaces=drive&pageSize=1000&fields=nextPageToken,files(id,name)&q=${encodeURIComponent(q)}${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`;
+      const o = await (await request(this.account, url)).json();
+      for (const f of o.files ?? []) out.push([f.name, f.id]);
+      page = o.nextPageToken || undefined;
+    } while (page);
+    return out;
+  }
+
+  downloadAny(id: string): Promise<Uint8Array> {
+    return this.download(id);
+  }
+
+  async uploadInto(folderId: string, name: string, data: Uint8Array, mime: string): Promise<string> {
+    const existing = await this.findChild(folderId, name);
+    const meta = existing ? {} : { name, parents: [folderId] };
+    const boundary = "zyll" + Math.random().toString(36).slice(2);
+    const body = new Blob([
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`,
+      `--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`,
+      data as Uint8Array<ArrayBuffer>,
+      `\r\n--${boundary}--`,
+    ]);
+    const url = existing ? `${G_UPLOAD}/${existing}?uploadType=multipart&fields=id` : `${G_UPLOAD}?uploadType=multipart&fields=id`;
+    const r = await request(this.account, url, { method: existing ? "PATCH" : "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body });
+    return (await r.json()).id;
+  }
+
+  deleteAny(id: string): Promise<void> {
+    return this.delete(id);
+  }
+
   /** My Drive 下带 appProperties.zyllRoot = "1" 的“Zyll 相册/”文件夹（开了分享功能、搬过去的库）。 */
   static async findVisibleRoot(acc: StoredAccount): Promise<string | null> {
     // 和 App 一致：名字是“Zyll 相册”、在根目录下、带 zyllRoot 标记
@@ -391,7 +481,7 @@ export class OneDrive implements Drive {
     return r.status !== 404;
   }
 
-  private async ensureFolder(path: string[]): Promise<{ id: string; driveId: string }> {
+  private async ensureFolderRef(path: string[]): Promise<{ id: string; driveId: string }> {
     if (!this.driveId) {
       const o = await (await request(this.account, `${MS_API}/me/drive/special/approot?$select=id,parentReference`)).json();
       this.driveId = o.parentReference?.driveId as string;
@@ -400,7 +490,7 @@ export class OneDrive implements Drive {
     const sel = path.length ? `:/${encPath(path)}` : "";
     const r = await request(this.account, `${MS_API}/me/drive/special/approot${sel}?$select=id`, {}, (s) => (s >= 200 && s < 300) || s === 404);
     if (r.status !== 404) return { id: (await r.json()).id, driveId: this.driveId };
-    const parent = await this.ensureFolder(path.slice(0, -1));
+    const parent = await this.ensureFolderRef(path.slice(0, -1));
     const c = await request(this.account, `${MS_API}/me/drive/items/${parent.id}/children`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -410,7 +500,7 @@ export class OneDrive implements Drive {
   }
 
   async copy(id: string, path: string[]): Promise<string> {
-    const parent = await this.ensureFolder(path.slice(0, -1));
+    const parent = await this.ensureFolderRef(path.slice(0, -1));
     const r = await request(this.account, `${MS_API}/me/drive/items/${id}/copy?@microsoft.graph.conflictBehavior=rename`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -427,6 +517,77 @@ export class OneDrive implements Drive {
       if (o.status === "failed") throw new Error(t("OneDrive 复制失败"));
     }
     throw new Error(t("OneDrive 复制超时"));
+  }
+
+  // ---------- 共享相册（spec/sharing.md） ----------
+
+  /** 别人网盘里的文件：id 形如“驱动器id!编号”，要按驱动器去取。 */
+  private itemUrl(id: string) {
+    return id.includes("!") ? `${MS_API}/drives/${encodeURIComponent(id.split("!")[0]!)}/items/${encodeURIComponent(id)}` : `${MS_API}/me/drive/items/${id}`;
+  }
+
+  async ensureFolder(path: string[]): Promise<string> {
+    return (await this.ensureFolderRef(path)).id;
+  }
+
+  async head(id: string, n: number): Promise<Uint8Array> {
+    if (!id.includes("!")) return this.download(id, [0, n]);
+    return bytes(await request(this.account, `${this.itemUrl(id)}/content`, { headers: rangeHeader([0, n]) }));
+  }
+
+  async grant(id: string, email: string, write: boolean): Promise<void> {
+    await request(this.account, `${this.itemUrl(id)}/invite`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipients: [{ email }], roles: [write ? "write" : "read"], requireSignIn: true, sendInvitation: false }),
+    });
+  }
+
+  async revokeEmail(id: string, email: string): Promise<void> {
+    const o = await (await request(this.account, `${this.itemUrl(id)}/permissions`)).json();
+    for (const p of (o.value ?? []) as Record<string, any>[]) {
+      if ((p.roles ?? []).includes("owner")) continue;
+      // 被邀请的人：grantedToV2.user.email（个人账号有时只有 invitation.email）
+      const who: string = p.grantedToV2?.user?.email || p.grantedTo?.user?.email || p.invitation?.email || "";
+      if (who.toLowerCase() !== email.toLowerCase()) continue;
+      await request(this.account, `${this.itemUrl(id)}/permissions/${encodeURIComponent(p.id)}`, { method: "DELETE" }, (s) => (s >= 200 && s < 300) || s === 404);
+    }
+  }
+
+  async findChild(folderId: string, name: string): Promise<string | null> {
+    const r = await request(this.account, `${this.itemUrl(folderId)}:/${encodeURIComponent(name)}?$select=id`, {}, (s) => (s >= 200 && s < 300) || s === 404);
+    if (r.status === 404) return null;
+    return (await r.json()).id;
+  }
+
+  async listChildren(folderId: string): Promise<[string, string][]> {
+    const out: [string, string][] = [];
+    let url: string | undefined = `${this.itemUrl(folderId)}/children?$select=id,name&$top=200`;
+    while (url) {
+      const o: Record<string, any> = await (await request(this.account, url)).json();
+      for (const f of o.value ?? []) out.push([f.name, f.id]);
+      url = o["@odata.nextLink"] || undefined;
+    }
+    return out;
+  }
+
+  async downloadAny(id: string): Promise<Uint8Array> {
+    if (!id.includes("!")) return this.download(id);
+    return bytes(await request(this.account, `${this.itemUrl(id)}/content`));
+  }
+
+  async uploadInto(folderId: string, name: string, data: Uint8Array, mime: string): Promise<string> {
+    const r = await request(this.account, `${this.itemUrl(folderId)}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=replace`, {
+      method: "PUT",
+      headers: { "Content-Type": mime },
+      body: data as Uint8Array<ArrayBuffer>,
+    });
+    return (await r.json()).id;
+  }
+
+  async deleteAny(id: string): Promise<void> {
+    await request(this.account, this.itemUrl(id), { method: "DELETE" }, (s) => (s >= 200 && s < 300) || s === 404);
+    this.downloadUrls.delete(id);
   }
 
   async quota(): Promise<Quota> {

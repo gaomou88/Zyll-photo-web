@@ -2,15 +2,23 @@
 // 生产构建里不会包含这个文件。
 import { BlobKind, keybundle } from "@zyll/crypto";
 import type { StoredAccount } from "./auth";
-import type { Drive, MediaRequest, Quota, UploadOptions, UploadSource } from "./drive";
+import type { Drive, MediaRequest, Quota, SharingDrive, UploadOptions, UploadSource } from "./drive";
 import { encryptingSource, bytesSource } from "./zylcio";
 
 interface F { id: string; path: string; data: Uint8Array }
 
-export class MemoryDrive implements Drive {
+/** 所有假网盘（共享相册：读别人共享给自己的文件）。 */
+const world: MemoryDrive[] = [];
+/** 文件或文件夹 id → 有权限的邮箱 → 能不能写。 */
+const perms = new Map<string, Map<string, boolean>>();
+
+export class MemoryDrive implements Drive, SharingDrive {
   files = new Map<string, F>();
   private n = 0;
-  constructor(readonly account: StoredAccount) {}
+  constructor(readonly account: StoredAccount) {
+    world.push(this);
+  }
+  private prefix() { return this.account.key.replace(/[^a-z]/gi, "") + "-"; }
   private byPath(path: string[]) {
     const p = path.join("/");
     return [...this.files.values()].find((f) => f.path === p) ?? null;
@@ -29,7 +37,7 @@ export class MemoryDrive implements Drive {
     await new Promise((r) => setTimeout(r, 150));
     const data = await src.read(0, src.size);
     const existing = opts.replace ? this.byPath(path) : null;
-    const id = existing?.id ?? `f${++this.n}`;
+    const id = existing?.id ?? `${this.prefix()}f${++this.n}`;
     this.files.set(id, { id, path: path.join("/"), data });
     opts.onProgress?.(src.size);
     return id;
@@ -38,11 +46,83 @@ export class MemoryDrive implements Drive {
   async exists(id: string) { return this.files.has(id); }
   async copy(id: string, path: string[]) {
     const f = this.files.get(id)!;
-    const nid = `f${++this.n}`;
+    const nid = `${this.prefix()}f${++this.n}`;
     this.files.set(nid, { id: nid, path: path.join("/"), data: f.data });
     return nid;
   }
   async quota(): Promise<Quota> { return { total: 15e9, used: 2.3e9 }; }
+
+  // ---------- 共享相册 ----------
+  // 文件夹 id 形如 “dir:<网盘前缀>:<路径>”；文件 id 带网盘前缀，别的网盘的文件按权限读
+  async ensureFolder(path: string[]) { return `dir:${this.prefix()}:${path.join("/")}`; }
+  private static locate(id: string): { d: MemoryDrive; path: string } | null {
+    if (id.startsWith("dir:")) {
+      const [, pre, ...rest] = id.split(":");
+      const d = world.find((w) => w.prefix() === pre);
+      return d ? { d, path: rest.join(":") } : null;
+    }
+    for (const d of world) {
+      const f = d.files.get(id);
+      if (f) return { d, path: f.path };
+    }
+    return null;
+  }
+  private allowed(id: string, write: boolean): MemoryDrive {
+    const at = MemoryDrive.locate(id);
+    if (!at) throw new Error("404");
+    if (at.d === this) return at.d;
+    const me = this.account.email.toLowerCase();
+    // 文件本身或者它所在的文件夹授权过
+    for (const [pid, m] of perms) {
+      const w = m.get(me);
+      if (w === undefined || (write && !w)) continue;
+      if (pid === id) return at.d;
+      const dir = MemoryDrive.locate(pid);
+      if (dir && dir.d === at.d && pid.startsWith("dir:") && (at.path === dir.path || at.path.startsWith(dir.path + "/"))) return at.d;
+    }
+    throw new Error("404");
+  }
+  async head(id: string, n: number) { return this.downloadAny(id).then((b) => b.slice(0, n)); }
+  async grant(id: string, email: string, write: boolean) {
+    const m = perms.get(id) ?? new Map<string, boolean>();
+    m.set(email.toLowerCase(), write);
+    perms.set(id, m);
+  }
+  async revokeEmail(id: string, email: string) { perms.get(id)?.delete(email.toLowerCase()); }
+  async findChild(folderId: string, name: string) {
+    const d = this.allowed(folderId, false);
+    const base = MemoryDrive.locate(folderId)!.path;
+    return [...d.files.values()].find((f) => f.path === (base ? base + "/" : "") + name)?.id ?? null;
+  }
+  async listChildren(folderId: string): Promise<[string, string][]> {
+    const d = this.allowed(folderId, false);
+    const base = MemoryDrive.locate(folderId)!.path;
+    const out = new Map<string, string>();
+    for (const f of d.files.values()) {
+      if (!f.path.startsWith(base + "/")) continue;
+      const rest = f.path.slice(base.length + 1).split("/");
+      out.set(rest[0]!, rest.length > 1 ? `dir:${d.prefix()}:${base}/${rest[0]}` : f.id);
+    }
+    return [...out];
+  }
+  async downloadAny(id: string) {
+    const d = this.allowed(id, false);
+    return d.files.get(id)!.data.slice();
+  }
+  async uploadInto(folderId: string, name: string, data: Uint8Array) {
+    const d = this.allowed(folderId, true);
+    const path = MemoryDrive.locate(folderId)!.path + "/" + name;
+    const old = [...d.files.values()].find((f) => f.path === path);
+    const id = old?.id ?? `${d.prefix()}f${++d.n}`;
+    d.files.set(id, { id, path, data: data.slice() });
+    return id;
+  }
+  async deleteAny(id: string) {
+    const d = this.allowed(id, true);
+    if (!id.startsWith("dir:")) return void d.files.delete(id);
+    const base = MemoryDrive.locate(id)!.path;
+    for (const f of [...d.files.values()]) if (f.path.startsWith(base + "/")) d.files.delete(f.id);
+  }
 }
 
 async function picture(w: number, h: number, hue: number, label: string): Promise<Blob> {
@@ -67,8 +147,8 @@ export function emptyDrive(): MemoryDrive {
 }
 
 /** 造一个开着端到端加密的库：密码 test1234，几十张照片。 */
-export async function demoDrive(): Promise<MemoryDrive> {
-  const acc: StoredAccount = { key: "onedrive:demo", kind: "onedrive", accountId: "demo", email: "demo@example.com", accessToken: "x", expiresAt: Date.now() + 1e9 };
+export async function demoDrive(who = "demo", count = 24): Promise<MemoryDrive> {
+  const acc: StoredAccount = { key: `onedrive:${who}`, kind: "onedrive", accountId: who, email: `${who}@example.com`, accessToken: "x", expiresAt: Date.now() + 1e9 };
   const d = new MemoryDrive(acc);
   const created = await keybundle.create("test1234", { memoryKiB: 8192, iterations: 1, parallelism: 1 });
   const enc = new TextEncoder();
@@ -76,7 +156,7 @@ export async function demoDrive(): Promise<MemoryDrive> {
   const key = created.vault.wrapKey;
   const items = [];
   const now = Date.now();
-  for (let i = 0; i < 24; i++) {
+  for (let i = 0; i < count; i++) {
     const big = await picture(1600, 1200, i * 37, `照片 ${i + 1}`);
     const small = await picture(384, 288, i * 37, `${i + 1}`);
     const r = await d.upload(["vault", `orig${i}.zylc`], await encryptingSource(big, BlobKind.Original, key));

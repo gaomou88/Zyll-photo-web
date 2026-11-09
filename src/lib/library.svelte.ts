@@ -17,14 +17,14 @@ import { t } from "./i18n";
 const text = new TextDecoder();
 const utf8 = new TextEncoder();
 
-function lsGet(k: string): string | null {
+export function lsGet(k: string): string | null {
   try {
     return localStorage.getItem(k);
   } catch {
     return null;
   }
 }
-function lsSet(k: string, v: string | null) {
+export function lsSet(k: string, v: string | null) {
   try {
     if (v === null) localStorage.removeItem(k);
     else localStorage.setItem(k, v);
@@ -756,10 +756,10 @@ class Library {
 
   async loadAll() {
     if (import.meta.env.DEV && new URLSearchParams(location.search).has("demo")) {
-      // ?demo：加密的演示库；?demo=empty：一个空网盘；?demo=two：加密的 + 空的
+      // ?demo：加密的演示库；?demo=empty：一个空网盘；?demo=two：加密的 + 空的；?demo=share：两个加密的库（试共享相册）
       const { demoDrive, emptyDrive } = await import("./demo");
       const mode = new URLSearchParams(location.search).get("demo");
-      const drives = mode === "empty" ? [emptyDrive()] : mode === "two" ? [await demoDrive(), emptyDrive()] : [await demoDrive()];
+      const drives = mode === "empty" ? [emptyDrive()] : mode === "two" ? [await demoDrive(), emptyDrive()] : mode === "share" ? [await demoDrive(), await demoDrive("friend", 4)] : [await demoDrive()];
       this.accounts = drives.map((d) => {
         const acc = new Account(d.account);
         acc.drive = d;
