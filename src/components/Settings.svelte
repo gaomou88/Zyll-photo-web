@@ -68,7 +68,7 @@
           <div class="muted">{a.where}</div>
           {#if a.error}<div class="error">{a.error}</div>{/if}
           {#if a.readOnly}<div class="error">{a.readOnly}</div>{/if}
-          {#if a.migrating}<div class="error">手机正在搬迁存储位置，搬完前不能往这里上传新照片。</div>{/if}
+          {#if a.migrating}<div class="error">手机正在搬迁存储位置，搬完前不能在这里上传或删除照片。</div>{/if}
           {#if a.migrationStale}
             <div class="error">搬迁已经超过 3 天没有进展，搬的那台手机可能已经不用了。如果确定不会再搬，可以不再等它，恢复上传。</div>
             <button class="btn text" onclick={() => confirm("确定不再等那台手机搬完？如果它之后又继续搬，网页会重新等待。") && a.stopWaitingMigration()}>不再等它</button>
