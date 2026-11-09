@@ -81,6 +81,15 @@
   $effect(() => {
     if (!joinAcc || !joinChoices.includes(joinAcc)) joinAcc = joinChoices[0] ?? null;
   });
+  let joinCopied = $state(false);
+  async function copyJoin() {
+    try {
+      await navigator.clipboard.writeText(joinText.trim());
+      joinCopied = true;
+    } catch {
+      joinCopied = false;
+    }
+  }
   async function join() {
     if (!invite || !joinAcc) return;
     joining = true;
@@ -155,7 +164,10 @@
         <p>{t("{owner} 邀请你加入“{name}”。", { owner: invite.owner || t("对方"), name: invite.name || t("共享相册") })}</p>
         <p class="muted small">{t("主人的安全码：")}<code>{invite.code}</code>{t("（请和对方核对）")}</p>
         {#if invite.provider === "google"}
-          <p class="notice small">{t("Google 账号暂时只能在手机 Zyll 里加入共享相册，网页版还不能接收。请在手机上打开这个链接。")}</p>
+          <p class="notice small">{t("Google 账号暂时只能在手机 Zyll App 里加入共享相册，网页版还不能接收。请复制这个链接，在 App 的「我的」→「共享相册」→「加入相册」里粘贴。")}</p>
+          <div class="row">
+            <button class="btn" onclick={() => copyJoin()}>{joinCopied ? t("已复制") : t("复制链接")}</button>
+          </div>
         {:else}
           {#each joinBlocked as a (a.key)}
             <div class="row wrap">
