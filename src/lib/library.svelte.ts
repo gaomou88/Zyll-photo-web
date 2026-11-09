@@ -823,6 +823,11 @@ class Library {
   }
 
   /** 已经解锁、可以给新账号沿用的那套密钥所在的账号 */
+  /** 内存里所有已解锁的包裹密钥。 */
+  wrapKeys(): CryptoKey[] {
+    return [...keyring.values()];
+  }
+
   unlockedVaultAccount(except?: Account): Account | null {
     return this.accounts.find((a) => a !== except && a.bundleJson && a.wrapKey()) ?? null;
   }

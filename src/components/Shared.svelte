@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import SharedAlbum from "./SharedAlbum.svelte";
+  import EncryptSetup from "./EncryptSetup.svelte";
   import { t } from "../lib/i18n";
   import { library, type Account } from "../lib/library.svelte";
   import { parseCard, parseInvite, problemText, shared, type ShareCard } from "../lib/sharing.svelte";
@@ -11,6 +12,18 @@
   const accounts = $derived(library.accounts.filter((a) => a.state === "ready"));
   const usable = $derived(accounts.filter((a) => !shared.problem(a)));
   const problems = $derived(accounts.filter((a) => shared.problem(a)).map((a) => ({ a, p: shared.problem(a) })));
+  /** 能接收共享（发名片、加入）的账号：只要库开着加密并且已解锁。 */
+  const receivers = $derived(accounts.filter((a) => !shared.joinProblem(a)));
+  let encrypting = $state<Account | null>(null);
+  let connectErr = $state("");
+  async function connectOneDrive() {
+    connectErr = "";
+    try {
+      await library.connect("onedrive");
+    } catch (e) {
+      connectErr = (e as Error).message;
+    }
+  }
 
   let open = $state<string | null>(null);
   let syncErrors = $state<string[]>([]);
@@ -62,7 +75,9 @@
     else parseCard(incoming).then((c) => (incomingCard = c));
   });
   const invite = $derived(parseInvite(joinText));
-  const joinChoices = $derived(invite ? usable.filter((a) => a.stored.kind === invite.provider) : []);
+  const joinChoices = $derived(invite ? receivers.filter((a) => a.stored.kind === invite.provider) : []);
+  /** 同一家网盘、还不能用来加入的账号（没开加密、没解锁）。 */
+  const joinBlocked = $derived(invite ? accounts.filter((a) => a.stored.kind === invite.provider && shared.joinProblem(a)) : []);
   $effect(() => {
     if (!joinAcc || !joinChoices.includes(joinAcc)) joinAcc = joinChoices[0] ?? null;
   });
@@ -83,7 +98,7 @@
 
   const albums = $derived([...shared.albums].sort((a, b) => b.addedAt - a.addedAt));
   const accLabel = (key: string) => library.accounts.find((a) => a.key === key)?.label ?? "";
-  const roleText = (r: string | null) => (r === null ? t("我建的") : r === "manager" ? t("可管理") : r === "contributor" ? t("可添加") : t("仅查看"));
+  const roleText = (r: string | null) => (r === null ? t("主人") : r === "manager" ? t("可管理") : r === "contributor" ? t("可添加") : t("仅查看"));
 </script>
 
 {#if open}
@@ -101,7 +116,7 @@
     {#if incomingCard}
       <div class="box">
         <h3>{t("收到一张分享名片")}</h3>
-        <p>{t("{email} 想接收你的共享相册。打开你要分享的相册，点“邀请”就会用这张名片。", { email: incomingCard.email })}</p>
+        <p>{t("{email} 想接收你的共享相册。打开你要分享的相册，点“邀请成员”就会用这张名片。", { email: incomingCard.email })}</p>
         <p class="muted">{t("请先和对方当面或打电话核对安全码：")} <code>{incomingCard.member.code}</code></p>
         <button class="btn text" onclick={() => (incomingCard = null)}>{t("忽略")}</button>
       </div>
@@ -139,15 +154,31 @@
       {#if invite}
         <p>{t("{owner} 邀请你加入“{name}”。", { owner: invite.owner || t("对方"), name: invite.name || t("共享相册") })}</p>
         <p class="muted small">{t("主人的安全码：")}<code>{invite.code}</code>{t("（请和对方核对）")}</p>
-        {#if joinChoices.length === 0}
-          <p class="error small">{invite.provider === "google" ? t("需要一个已解锁、可以共享的 Google 账号。") : t("需要一个已解锁的 OneDrive 账号。")}</p>
+        {#if invite.provider === "google"}
+          <p class="notice small">{t("Google 账号暂时只能在手机 Zyll 里加入共享相册，网页版还不能接收。请在手机上打开这个链接。")}</p>
         {:else}
-          <div class="row">
-            {#if joinChoices.length > 1}
-              <select bind:value={joinAcc} disabled={joining}>{#each joinChoices as a}<option value={a}>{a.label}</option>{/each}</select>
-            {/if}
-            <button class="btn primary" onclick={join} disabled={joining || !joinAcc}>{joining ? t("正在加入…") : t("加入")}</button>
-          </div>
+          {#each joinBlocked as a (a.key)}
+            <div class="row wrap">
+              <span class="muted small grow">{a.label}：{shared.joinProblem(a) === "locked" ? t("请先解锁加密的照片。") : a.isFresh ? t("还没开端到端加密，开启后才能加入。") : t("这个 OneDrive 没开端到端加密，请先在手机 Zyll 里开启加密。")}</span>
+              {#if shared.joinProblem(a) === "locked"}<button class="btn" onclick={onunlock}>{t("解锁")}</button>
+              {:else if a.isFresh}<button class="btn" onclick={() => (encrypting = a)}>{t("开启加密")}</button>{/if}
+            </div>
+          {/each}
+          {#if !accounts.some((a) => a.stored.kind === "onedrive")}
+            <div class="row wrap">
+              <span class="muted small grow">{t("要加入这个相册，请先连接你的 OneDrive 账号。")}</span>
+              <button class="btn" onclick={connectOneDrive}>{t("连接 OneDrive")}</button>
+            </div>
+            {#if connectErr}<p class="error small">{connectErr}</p>{/if}
+          {/if}
+          {#if joinChoices.length}
+            <div class="row">
+              {#if joinChoices.length > 1}
+                <select bind:value={joinAcc} disabled={joining}>{#each joinChoices as a}<option value={a}>{a.label}</option>{/each}</select>
+              {/if}
+              <button class="btn primary" onclick={join} disabled={joining || !joinAcc}>{joining ? t("正在加入…") : t("加入")}</button>
+            </div>
+          {/if}
         {/if}
         {#if joinErr}<p class="error small">{joinErr}</p>{/if}
       {/if}
@@ -156,15 +187,19 @@
     <section>
       <h3>{t("我的分享名片")}</h3>
       <p class="muted small">{t("想让别人把相册共享给你，就把名片链接发给对方。名片里只有公钥，没有任何密钥。")}</p>
-      {#if usable.length === 0}
-        <p class="muted small">{t("需要一个已解锁、可以共享的网盘账号。")}</p>
+      {#if receivers.length === 0}
+        <p class="muted small">{t("需要一个开着端到端加密、已经解锁的网盘账号。")}</p>
       {:else}
         <div class="row wrap">
-          {#each usable as a (a.key)}<button class="btn" onclick={() => showCard(a)}>{a.label}</button>{/each}
+          {#each receivers as a (a.key)}<button class="btn" onclick={() => showCard(a)}>{a.label}</button>{/each}
         </div>
       {/if}
     </section>
   </div>
+{/if}
+
+{#if encrypting}
+  <EncryptSetup acc={encrypting} onclose={() => (encrypting = null)} ondone={() => (encrypting = null)} />
 {/if}
 
 {#if cardFor}

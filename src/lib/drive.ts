@@ -55,8 +55,8 @@ export interface SharingDrive {
   grant(id: string, email: string, write: boolean): Promise<void>;
   revokeEmail(id: string, email: string): Promise<void>;
   findChild(folderId: string, name: string): Promise<string | null>;
-  /** [名字, id] 列表。 */
-  listChildren(folderId: string): Promise<[string, string][]>;
+  /** [名字, id, 修改时间（毫秒，拿不到时为 0）] 列表。 */
+  listChildren(folderId: string): Promise<[string, string, number][]>;
   downloadAny(id: string): Promise<Uint8Array>;
   /** 放进文件夹，同名就覆盖；返回文件 id。 */
   uploadInto(folderId: string, name: string, data: Uint8Array, mime: string): Promise<string>;
@@ -320,14 +320,14 @@ export class GoogleDrive implements Drive {
     return o.files?.[0]?.id ?? null;
   }
 
-  async listChildren(folderId: string): Promise<[string, string][]> {
+  async listChildren(folderId: string): Promise<[string, string, number][]> {
     const q = `'${folderId}' in parents and trashed = false`;
-    const out: [string, string][] = [];
+    const out: [string, string, number][] = [];
     let page: string | undefined;
     do {
-      const url = `${G_API}/files?spaces=drive&pageSize=1000&fields=nextPageToken,files(id,name)&q=${encodeURIComponent(q)}${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`;
+      const url = `${G_API}/files?spaces=drive&pageSize=1000&fields=nextPageToken,files(id,name,modifiedTime)&q=${encodeURIComponent(q)}${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`;
       const o = await (await request(this.account, url)).json();
-      for (const f of o.files ?? []) out.push([f.name, f.id]);
+      for (const f of o.files ?? []) out.push([f.name, f.id, Date.parse(f.modifiedTime ?? "") || 0]);
       page = o.nextPageToken || undefined;
     } while (page);
     return out;
@@ -560,12 +560,12 @@ export class OneDrive implements Drive {
     return (await r.json()).id;
   }
 
-  async listChildren(folderId: string): Promise<[string, string][]> {
-    const out: [string, string][] = [];
-    let url: string | undefined = `${this.itemUrl(folderId)}/children?$select=id,name&$top=200`;
+  async listChildren(folderId: string): Promise<[string, string, number][]> {
+    const out: [string, string, number][] = [];
+    let url: string | undefined = `${this.itemUrl(folderId)}/children?$select=id,name,lastModifiedDateTime&$top=200`;
     while (url) {
       const o: Record<string, any> = await (await request(this.account, url)).json();
-      for (const f of o.value ?? []) out.push([f.name, f.id]);
+      for (const f of o.value ?? []) out.push([f.name, f.id, Date.parse(f.lastModifiedDateTime ?? "") || 0]);
       url = o["@odata.nextLink"] || undefined;
     }
     return out;

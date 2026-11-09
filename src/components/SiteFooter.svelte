@@ -24,15 +24,15 @@
 </footer>
 
 <style>
-  footer { display: flex; flex-direction: column; gap: 10px; font-size: 12px; color: var(--muted); }
+  footer { display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted); }
   .oss { display: flex; flex-direction: column; gap: 2px; }
   .title { font-weight: 600; color: var(--text); margin-bottom: 2px; }
-  a { color: var(--muted); text-decoration: none; display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
+  a { color: var(--muted); text-decoration: none; display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
   a:hover { color: var(--accent); }
   .repo { font-family: ui-monospace, monospace; font-size: 11px; opacity: 0.85; }
   .license { margin-top: 2px; }
-  .legal { display: flex; gap: 6px; align-items: center; padding-top: 8px; border-top: 1px solid var(--border); }
-  .legal a { display: inline; padding: 0; }
+  .legal { display: flex; gap: 6px; align-items: center; padding-top: 6px; border-top: 1px solid var(--border); }
+  .legal a { display: inline; padding: 4px 0; font-size: 13px; color: var(--text); }
   .compact { align-items: center; text-align: center; }
   .compact .oss { align-items: center; }
   .compact a { justify-content: center; }
