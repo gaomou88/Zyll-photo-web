@@ -34,14 +34,71 @@ export async function takenAt(f: File, mime: string): Promise<number> {
   if (mime.startsWith("image/")) {
     try {
       const exifr = await import("exifr");
-      const o = await exifr.parse(f, { pick: ["DateTimeOriginal", "CreateDate"] });
+      const o = await exifr.parse(f, { pick: ["DateTimeOriginal", "CreateDate", "OffsetTimeOriginal", "OffsetTime"] });
       const d: unknown = o?.DateTimeOriginal ?? o?.CreateDate;
-      if (d instanceof Date && !isNaN(d.getTime())) return d.getTime();
+      if (d instanceof Date && !isNaN(d.getTime())) {
+        // EXIF 时间是拍摄地的墙上时间；有时区偏移就换算成准确的时刻，没有就按这台电脑的时区算
+        const off = parseOffset(o?.OffsetTimeOriginal ?? o?.OffsetTime);
+        if (off === null) return d.getTime();
+        const wall = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds());
+        return wall - off * 60_000;
+      }
     } catch {
       /* 没有 EXIF */
     }
   }
+  if (mime.startsWith("video/")) {
+    const t = await mp4CreationTime(f).catch(() => null);
+    if (t) return t;
+  }
   return f.lastModified || Date.now();
+}
+
+/** "+08:00" → 480（分钟）；格式不对返回 null。 */
+function parseOffset(v: unknown): number | null {
+  const m = typeof v === "string" ? /^([+-])(\d{2}):?(\d{2})$/.exec(v.trim()) : null;
+  if (!m) return null;
+  return (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]));
+}
+
+/** 读 MP4 / MOV 的 moov/mvhd 里的创建时间（UTC，1904 年起的秒数）。读不到返回 null。 */
+export async function mp4CreationTime(f: Blob): Promise<number | null> {
+  const read = async (start: number, len: number) => new DataView(await f.slice(start, Math.min(f.size, start + len)).arrayBuffer());
+  const type = (v: DataView, at: number) => String.fromCharCode(v.getUint8(at), v.getUint8(at + 1), v.getUint8(at + 2), v.getUint8(at + 3));
+  // 在顶层找 moov（可能在文件末尾）
+  let pos = 0;
+  let moov: [number, number] | null = null;
+  for (let n = 0; pos + 8 <= f.size && n < 64; n++) {
+    const h = await read(pos, 16);
+    let size = h.getUint32(0);
+    let header = 8;
+    if (size === 1) {
+      if (h.byteLength < 16) return null;
+      size = Number(h.getBigUint64(8));
+      header = 16;
+    } else if (size === 0) size = f.size - pos;
+    if (size < header) return null;
+    if (type(h, 4) === "moov") {
+      moov = [pos + header, size - header];
+      break;
+    }
+    pos += size;
+  }
+  if (!moov) return null;
+  const body = await read(moov[0], Math.min(moov[1], 4 << 20));
+  for (let p = 0; p + 8 <= body.byteLength; ) {
+    const size = body.getUint32(p);
+    if (size < 8) return null;
+    if (type(body, p + 4) === "mvhd") {
+      const version = body.getUint8(p + 8);
+      const secs = version === 1 ? Number(body.getBigUint64(p + 12)) : body.getUint32(p + 12);
+      const ms = (secs - 2082844800) * 1000;
+      // 没写时间（0）或明显不对的不用
+      return ms > Date.UTC(2000, 0, 1) && ms < Date.now() + 86_400_000 ? ms : null;
+    }
+    p += size;
+  }
+  return null;
 }
 
 /** HEIC → JPEG（大多数电脑浏览器不能直接显示 HEIC）。转码库很大，用到时才加载。 */

@@ -10,6 +10,7 @@
   import UploadDialog from "./components/UploadDialog.svelte";
   import UploadPanel from "./components/UploadPanel.svelte";
   import AppBanner from "./components/AppBanner.svelte";
+  import { t, htmlLang } from "./lib/i18n";
   import { library, type Photo } from "./lib/library.svelte";
   import { uploads } from "./lib/uploads.svelte";
   import { downloadPhotos } from "./lib/download";
@@ -38,6 +39,7 @@
   let view = $state<View>(initial.view);
   let album = $state<string | null>(initial.album);
   $effect(() => {
+    if (shareLink) return; // 共享链接弹框开着时保留地址栏里的链接
     const want = view === "photos" ? "" : `#/${view}${view === "albums" && album !== null ? "/" + encodeURIComponent(album) : ""}`;
     if (location.hash !== want && !(want === "" && location.hash === "")) {
       history.pushState(null, "", location.pathname + location.search + want);
@@ -64,20 +66,35 @@
 
   library.loadAll();
 
-  // 手机发来的共享链接（#card= 名片、#join= 邀请）：网页版暂不支持接收共享，先说明怎么做
-  let shareLink = $state<{ kind: "card" | "join"; who: string; name: string } | null>(null);
+  document.documentElement.lang = htmlLang;
+  // 手机发来的共享链接（#card= 名片、#join= 邀请）：App 没有注册网址，要复制链接到 App 里粘贴。
+  // 弹框关掉之前不动地址栏，方便用户自己再复制。
+  let shareLink = $state<{ kind: "card" | "join"; who: string; name: string; url: string } | null>(null);
+  let copied = $state("");
   {
     const m = /^#(card|join)=([A-Za-z0-9_-]+)$/.exec(location.hash);
     if (m) {
       try {
         const b64 = m[2]!.replace(/-/g, "+").replace(/_/g, "/");
         const o = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64 + "===".slice((b64.length + 3) % 4)), (c) => c.charCodeAt(0))));
-        shareLink = { kind: m[1] as "card" | "join", who: String(o.email ?? o.owner ?? ""), name: String(o.name ?? "") };
+        shareLink = { kind: m[1] as "card" | "join", who: String(o.email ?? o.owner ?? ""), name: String(o.name ?? ""), url: location.href };
       } catch {
         shareLink = null;
       }
-      history.replaceState(null, "", location.pathname + location.search);
     }
+  }
+  async function copyShare() {
+    try {
+      await navigator.clipboard.writeText(shareLink!.url);
+      copied = t("share.copied");
+    } catch {
+      copied = t("share.copyFail");
+    }
+  }
+  function closeShare() {
+    shareLink = null;
+    copied = "";
+    history.replaceState(null, "", location.pathname + location.search);
   }
   startServiceWorker();
 
@@ -99,7 +116,7 @@
     view === "albums" && album !== null ? album : { photos: "照片", albums: "相簿", videos: "视频", shared: "共享", settings: "设置" }[view],
   );
   const loading = $derived(library.accounts.some((a) => a.state === "loading"));
-  const problems = $derived(library.accounts.filter((a) => a.state === "signin" || a.state === "error" || a.readOnly));
+  const problems = $derived(library.accounts.filter((a) => a.state === "signin" || a.state === "error" || a.readOnly || a.migrating || a.lostUploads.length));
 
   function go(v: View) {
     view = v;
@@ -264,7 +281,7 @@
           <div class="notice">
             <Icon name="warn" />
             <span class="grow">
-              {a.label}：{a.state === "signin" ? "登录已过期" : a.state === "error" ? a.error : a.readOnly}
+              {a.label}：{a.state === "signin" ? "登录已过期" : a.state === "error" ? a.error : a.readOnly || (a.migrating ? "手机正在搬迁存储位置，暂时不能往这里上传新照片" : `这些照片在手机搬迁存储位置时丢了，请重新上传：${a.lostUploads.join("、")}`)}
             </span>
             {#if a.state === "signin"}<button class="btn" onclick={() => library.reconnect(a).catch((e) => (toast = e.message))}>重新连接</button>{/if}
             {#if a.state === "error"}<button class="btn" onclick={() => a.load()}>重试</button>{/if}
@@ -278,8 +295,8 @@
         {:else if view === "shared"}
           <div class="placeholder">
             <Icon name="shared" size={40} />
-            <h2>共享相册即将推出</h2>
-            <p class="muted">共享相册正在手机端开发，完成后网页版可以直接查看别人分享给你的相册，并按权限添加或管理照片。</p>
+            <h2>共享相册请在手机上使用</h2>
+            <p class="muted">共享相册已经可以在手机 Zyll 上使用。网页版暂时还不能查看共享相册，之后会支持。</p>
           </div>
         {:else if view === "albums" && album === null}
           <Albums photos={library.photos} onopen={(name) => (album = name)} />
@@ -326,11 +343,12 @@
 {#if confirmDelete}
   <div class="scrim">
     <div class="dialog">
-      <h2>从网盘永久删除 {confirmDelete.length} 项？</h2>
-      <p class="muted">会从所有已连接网盘的备份里删除，删除后无法恢复。手机上如果还留着这些照片，手机会再备份一次。</p>
+      <h2>{t("delete.title", { n: confirmDelete.length })}</h2>
+      <p class="muted">{t("delete.body")}</p>
+      <p class="notice">{t("delete.warn")}</p>
       <div class="actions">
-        <button class="btn" disabled={deleting} onclick={() => (confirmDelete = null)}>取消</button>
-        <button class="btn primary" disabled={deleting} onclick={doDelete}>{deleting ? "正在删除…" : "删除"}</button>
+        <button class="btn" disabled={deleting} onclick={() => (confirmDelete = null)}>{t("common.cancel")}</button>
+        <button class="btn primary" disabled={deleting} onclick={doDelete}>{deleting ? t("delete.busy") : t("delete.ok")}</button>
       </div>
     </div>
   </div>
@@ -339,15 +357,21 @@
 {#if shareLink}
   <div class="scrim">
     <div class="dialog">
-      <h2>{shareLink.kind === "join" ? "共享相册邀请" : "分享名片"}</h2>
+      <h2>{shareLink.kind === "join" ? t("share.joinTitle") : t("share.cardTitle")}</h2>
       {#if shareLink.kind === "join"}
-        <p>{shareLink.who || "对方"} 邀请你加入共享相册{shareLink.name ? `“${shareLink.name}”` : ""}。</p>
-        <p class="muted">网页版暂时还不能接收共享相册，请在手机 Zyll 里打开这个链接（或扫描对方的二维码）接受邀请。网页版支持后会在“共享”里直接显示。</p>
+        <p>{t("share.joinText", { who: shareLink.who || t("share.someone"), name: shareLink.name ? ` “${shareLink.name}”` : "" })}</p>
+        <p>{t("share.joinSteps")}</p>
       {:else}
-        <p>这是 {shareLink.who || "对方"} 的 Zyll 分享名片。</p>
-        <p class="muted">要把相册共享给 TA，请在手机 Zyll 的共享相册里添加成员时打开这个名片，并和对方核对安全码。</p>
+        <p>{t("share.cardText", { who: shareLink.who || t("share.someone") })}</p>
+        <p>{t("share.cardSteps")}</p>
       {/if}
-      <div class="actions"><button class="btn primary" onclick={() => (shareLink = null)}>知道了</button></div>
+      <div class="link">{shareLink.url}</div>
+      {#if copied}<p class="muted">{copied}</p>{/if}
+      <p class="muted">{t("share.webNote")} {t("share.install")}</p>
+      <div class="actions">
+        <button class="btn" onclick={closeShare}>{t("common.close")}</button>
+        <button class="btn primary" onclick={copyShare}>{t("share.copy")}</button>
+      </div>
     </div>
   </div>
 {/if}
@@ -397,6 +421,7 @@
   .drop div { background: var(--surface); padding: 24px 36px; border-radius: 20px; text-align: center; color: var(--accent); display: flex; flex-direction: column; align-items: center; }
   .drop p { margin: 8px 0 0; font-weight: 500; }
   .view { display: flex; flex-direction: column; gap: 12px; animation: zy-rise 0.22s cubic-bezier(0.2, 0, 0, 1); }
+  .link { font: 12px/1.5 ui-monospace, monospace; word-break: break-all; user-select: all; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; max-height: 96px; overflow: auto; }
   .toast { animation: zy-rise 0.2s cubic-bezier(0.2, 0, 0, 1);
     position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 70; background: var(--text); color: var(--bg);
     padding: 10px 18px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow); max-width: calc(100vw - 32px);

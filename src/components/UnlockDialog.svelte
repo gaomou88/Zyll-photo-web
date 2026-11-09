@@ -1,6 +1,7 @@
 <script lang="ts">
   import { library } from "../lib/library.svelte";
   import { uploads } from "../lib/uploads.svelte";
+  import { t } from "../lib/i18n";
 
   let { onclose }: { onclose: () => void } = $props();
   let secret = $state("");
@@ -28,21 +29,21 @@
 
 <div class="scrim">
   <form class="dialog" onsubmit={submit}>
-    <h2>解锁加密照片</h2>
-    <p class="muted">输入你在手机 Zyll 里设置的端到端加密密码。密码只在这个浏览器里用来解开密钥，不会发送到任何地方。</p>
+    <h2>{t("unlock.title")}</h2>
+    <p class="muted">{t("unlock.desc")}</p>
     <label class="field">
-      {recovery ? "恢复密钥" : "解锁密码"}
+      {recovery ? t("unlock.recovery") : t("unlock.password")}
       <!-- svelte-ignore a11y_autofocus -->
       <input type={recovery ? "text" : "password"} bind:value={secret} autocomplete="off" autofocus class:mono={recovery}
         placeholder={recovery ? "XXXX-XXXX-…" : ""} />
     </label>
     <button type="button" class="btn text" style="align-self: flex-start" onclick={() => (recovery = !recovery)}>
-      {recovery ? "改用密码" : "忘了密码？用恢复密钥"}
+      {recovery ? t("unlock.usePassword") : t("unlock.useRecovery")}
     </button>
     {#if error}<p class="error">{error}</p>{/if}
     <div class="actions">
-      <button type="button" class="btn" onclick={onclose}>以后再说</button>
-      <button type="submit" class="btn primary" disabled={busy || !secret}>{busy ? "正在解锁…" : "解锁"}</button>
+      <button type="button" class="btn" onclick={onclose}>{t("unlock.later")}</button>
+      <button type="submit" class="btn primary" disabled={busy || !secret}>{busy ? t("unlock.busy") : t("unlock.ok")}</button>
     </div>
   </form>
 </div>

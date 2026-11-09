@@ -35,6 +35,7 @@ export class MemoryDrive implements Drive {
     return id;
   }
   async delete(id: string) { this.files.delete(id); }
+  async exists(id: string) { return this.files.has(id); }
   async copy(id: string, path: string[]) {
     const f = this.files.get(id)!;
     const nid = `f${++this.n}`;
