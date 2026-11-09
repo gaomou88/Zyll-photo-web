@@ -1,5 +1,5 @@
 import { NeedsSignIn, accessToken, invalidate, type StoredAccount } from "./auth";
-import { SIMPLE_UPLOAD_MAX, SLICE } from "./config";
+import { SIMPLE_UPLOAD_MAX, SLICE, VISIBLE_ROOT } from "./config";
 
 /** 要上传的内容：按需读出一段字节（加密文件边读边加密，不整个放进内存）。 */
 export interface UploadSource {
@@ -35,6 +35,8 @@ export interface Drive {
   upload(path: string[], src: UploadSource, opts?: UploadOptions): Promise<string>;
   /** 删除；文件已经不在了也算成功。 */
   delete(id: string): Promise<void>;
+  /** 文件还在不在（不在回收站里）。 */
+  exists(id: string): Promise<boolean>;
   /** 在网盘服务器上复制一份到 [path]，返回新文件 id（不经过浏览器）。 */
   copy(id: string, path: string[]): Promise<string>;
   quota(): Promise<Quota>;
@@ -241,6 +243,12 @@ export class GoogleDrive implements Drive {
     await request(this.account, `${G_API}/files/${id}`, { method: "DELETE" }, (s) => (s >= 200 && s < 300) || s === 404);
   }
 
+  async exists(id: string): Promise<boolean> {
+    const r = await request(this.account, `${G_API}/files/${id}?fields=id,trashed`, {}, (s) => (s >= 200 && s < 300) || s === 404);
+    if (r.status === 404) return false;
+    return !(await r.json()).trashed;
+  }
+
   async copy(id: string, path: string[]): Promise<string> {
     const parent = (await this.folderId(path.slice(0, -1), true))!;
     const r = await request(this.account, `${G_API}/files/${id}/copy?fields=id`, {
@@ -259,7 +267,8 @@ export class GoogleDrive implements Drive {
 
   /** My Drive 下带 appProperties.zyllRoot = "1" 的“Zyll 相册/”文件夹（开了分享功能、搬过去的库）。 */
   static async findVisibleRoot(acc: StoredAccount): Promise<string | null> {
-    const q = `appProperties has { key='zyllRoot' and value='1' } and mimeType = '${G_FOLDER}' and trashed = false`;
+    // 和 App 一致：名字是“Zyll 相册”、在根目录下、带 zyllRoot 标记
+    const q = `name = '${VISIBLE_ROOT}' and mimeType = '${G_FOLDER}' and 'root' in parents and trashed = false and appProperties has { key='zyllRoot' and value='1' }`;
     const url = `${G_API}/files?spaces=drive&fields=files(id)&q=${encodeURIComponent(q)}`;
     const o = await (await request(acc, url)).json();
     return o.files?.[0]?.id ?? null;
@@ -358,6 +367,11 @@ export class OneDrive implements Drive {
   async delete(id: string): Promise<void> {
     await request(this.account, `${MS_API}/me/drive/items/${id}`, { method: "DELETE" }, (s) => (s >= 200 && s < 300) || s === 404);
     this.downloadUrls.delete(id);
+  }
+
+  async exists(id: string): Promise<boolean> {
+    const r = await request(this.account, `${MS_API}/me/drive/items/${id}?$select=id`, {}, (s) => (s >= 200 && s < 300) || s === 404);
+    return r.status !== 404;
   }
 
   private async ensureFolder(path: string[]): Promise<{ id: string; driveId: string }> {

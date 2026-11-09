@@ -10,7 +10,7 @@
     onneedunlock: () => void;
   } = $props();
 
-  const writable = $derived(library.accounts.filter((a) => a.state === "ready" && !a.readOnly));
+  const writable = $derived(library.accounts.filter((a) => a.state === "ready" && !a.readOnly && !a.migrating));
   let target = $state<Account | null>(null);
   $effect(() => {
     if (!target || !writable.includes(target)) target = writable[0] ?? null;
@@ -38,7 +38,7 @@
 <div class="scrim">
   <div class="dialog">
     <h2>上传 {files.length} 个文件</h2>
-    <p class="muted">共 {fmtSize(size)}。和网盘里内容相同的照片会自动跳过。</p>
+    <p class="muted">共 {fmtSize(size)}。和网盘里内容相同的照片会自动跳过。只传到选中的这一个账号，手机上设的“每种网盘各一份”对网页上传不生效。</p>
     {#if writable.length === 0}
       <p class="error">没有可以上传的网盘账号（未连接、需要续期或只读）。</p>
     {:else}

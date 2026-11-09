@@ -35,7 +35,9 @@
     loading = true;
     (async () => {
       try {
-        if (!p.acc.canOpen(p.item)) throw new Error("这张照片是加密的，请先解锁");
+        if (!p.acc.canOpen(p.item)) {
+          throw new Error(p.acc.wrapKey() ? "这张照片用以前的密钥加密，手机上转换完成后就能看" : "这张照片是加密的，请先解锁");
+        }
         if (p.item.m.startsWith("video/")) {
           if (await canStream()) {
             streamed = await streamUrl(p.acc, p.item);

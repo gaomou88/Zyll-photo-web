@@ -2,6 +2,7 @@
   import Icon from "./Icon.svelte";
   import { configured, cancelSignIn, type DriveKind } from "../lib/auth";
   import { library } from "../lib/library.svelte";
+  import { t } from "../lib/i18n";
 
   let busy = $state<DriveKind | null>(null);
   let error = $state("");
@@ -22,23 +23,23 @@
 <div class="welcome">
   <div class="card">
     <img class="logo" src="./icon-192.png" alt="Zyll" width="72" height="72" />
-    <h1>Zyll 相册 · 网页版</h1>
-    <p>在电脑上查看、上传和下载你手机备份到网盘的照片。照片存在<strong>你自己的</strong>网盘里，加密的照片只在这个浏览器里解密，网盘和任何服务器都看不到内容。</p>
+    <h1>{t("welcome.title")}</h1>
+    <p>{t("welcome.intro1")}<strong>{t("welcome.introStrong")}</strong>{t("welcome.intro2")}</p>
     <div class="buttons">
       <button class="btn primary" disabled={!!busy || !configured("google")} onclick={() => connect("google")}>
-        <Icon name="cloud" size={18} /> {busy === "google" ? "等待登录…" : "连接 Google 云端硬盘"}
+        <Icon name="cloud" size={18} /> {busy === "google" ? t("welcome.waiting") : t("welcome.google")}
       </button>
       <button class="btn primary" disabled={!!busy || !configured("onedrive")} onclick={() => connect("onedrive")}>
-        <Icon name="cloud" size={18} /> {busy === "onedrive" ? "等待登录…" : "连接 OneDrive"}
+        <Icon name="cloud" size={18} /> {busy === "onedrive" ? t("welcome.waiting") : t("welcome.onedrive")}
       </button>
-      {#if busy}<button class="btn text" onclick={cancelSignIn}>取消</button>{/if}
+      {#if busy}<button class="btn text" onclick={cancelSignIn}>{t("common.cancel")}</button>{/if}
     </div>
     {#if !configured("google") || !configured("onedrive")}
       <p class="muted">这个网页版还没有配置{!configured("google") ? " Google" : ""}{!configured("google") && !configured("onedrive") ? " 和" : ""}{!configured("onedrive") ? " OneDrive" : ""} 的登录，对应按钮暂不可用。</p>
     {/if}
     {#if error}<p class="error">{error}</p>{/if}
-    <p class="muted">登录在弹出的窗口里完成，请允许本网站弹出窗口。用和手机 Zyll 相同的网盘账号登录才能看到手机的备份。</p>
-    <p class="muted legal">连接即表示你同意<a href="terms.html" target="_blank" rel="noopener">使用条款</a>和<a href="privacy.html" target="_blank" rel="noopener">隐私政策</a></p>
+    <p class="muted">{t("welcome.popup")}</p>
+    <p class="muted legal">{t("legal.agree1")}<a href="terms.html" target="_blank" rel="noopener">{t("legal.terms")}</a>{t("legal.and")}<a href="privacy.html" target="_blank" rel="noopener">{t("legal.privacy")}</a></p>
   </div>
 </div>
 

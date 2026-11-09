@@ -69,6 +69,8 @@ async function readMarker(d: Drive): Promise<{ state: string; to: string } | nul
   }
 }
 
+const MIGRATING = "手机正在搬迁这个网盘的存储位置，搬完前网页版不能往这里上传新照片。";
+
 export class Locked extends Error {
   constructor() {
     super("需要解锁");
@@ -88,6 +90,15 @@ interface Pulled {
   merged: Merged;
   encId: string | null;
   plainId: string | null;
+  /** 有加密目录时，明文目录里多出来的条目：只显示，不写回 */
+  extra: IndexItem[];
+}
+
+/** 网页删除了、还没确认已经写进网盘目录的墓碑。 */
+interface PendingDel {
+  r: string;
+  /** 要删的文件（原图、缩略图），删掉后从这里去掉 */
+  f: string[];
 }
 
 export type AccountState = "loading" | "ready" | "locked" | "signin" | "error";
@@ -97,6 +108,12 @@ export class Account {
   error = $state("");
   /** 不能写网盘的原因（目录回滚、手机正在搬迁存储位置等）；为空时可以上传和删除 */
   readOnly = $state("");
+  /** 只读是因为网盘目录比本机见过的旧（手机选了“以网盘为准”或者被还原过） */
+  rolledBack = $state(false);
+  /** 手机正在搬迁存储位置：不能开始新的上传，已经传完的照常写进目录 */
+  migrating = $state(false);
+  /** 搬迁后找不到了、需要重新上传的文件名 */
+  lostUploads = $state<string[]>([]);
   items = $state.raw<IndexItem[]>([]);
   quota = $state<Quota>({});
   /** 网盘里有密钥包（开过端到端加密） */
@@ -105,19 +122,21 @@ export class Account {
   where = $state("");
   drive: Drive;
   private merged: Merged | null = null;
+  private driveSeq = 0;
+  private verifyTimer: ReturnType<typeof setTimeout> | null = null;
   private encId: string | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(public stored: StoredAccount) {
     this.drive = stored.kind === "google" ? new GoogleDrive(stored) : new OneDrive(stored);
-    this.where = stored.kind === "google" ? "Google 云端硬盘 · 隐藏的应用数据区" : "OneDrive · 应用/Zyll 相册";
+    this.where = stored.kind === "google" ? "Google 网盘 · 隐藏区" : "OneDrive · 应用/Zyll 相册";
   }
 
   get key() {
     return this.stored.key;
   }
   get label() {
-    return `${this.stored.kind === "google" ? "Google" : "OneDrive"} · ${this.stored.email}`;
+    return `${this.stored.kind === "google" ? "Google 网盘" : "OneDrive"}（${this.stored.email}）`;
   }
 
   get bundleVaultId(): string | null {
@@ -161,6 +180,9 @@ export class Account {
   private get pendingKey() {
     return `zyll-pending-${this.key}`;
   }
+  private get pendingDelKey() {
+    return `zyll-pdel-${this.key}`;
+  }
 
   private lock<T>(job: () => Promise<T>): Promise<T> {
     const next = this.queue.then(job, job);
@@ -177,6 +199,7 @@ export class Account {
         const id = await step("查找密钥包", () => this.drive.findFile(KEYBUNDLE_PATH));
         this.bundleJson = id ? await step("读取密钥包", async () => text.decode(await this.drive.download(id))) : null;
         const p = await step("读取备份目录", () => this.pull());
+        this.confirm(p.merged);
         this.apply(p);
       });
       this.state = "ready";
@@ -211,10 +234,10 @@ export class Account {
     const at = (where: "hidden" | "visible") => {
       if (where === "visible" && visibleId) {
         this.drive = new GoogleDrive(this.stored, visibleId);
-        this.where = `Google 云端硬盘 · 我的云端硬盘/${VISIBLE_ROOT}`;
+        this.where = `Google 网盘 · 我的云端硬盘/${VISIBLE_ROOT}`;
       } else {
         this.drive = hidden;
-        this.where = "Google 云端硬盘 · 隐藏的应用数据区";
+        this.where = "Google 网盘 · 隐藏区";
       }
     };
     at("hidden");
@@ -244,36 +267,91 @@ export class Account {
       encDoc = parseIndex(text.decode(plain));
       docs.push(encDoc);
     }
-    if (plainId) {
-      const d = parseIndex(text.decode(await this.drive.download(plainId)));
-      // 开着加密时不信任明文目录（能写网盘的人放一份明文目录就能塞进假照片），和安卓一致
-      if (!(encDoc && encDoc.mode?.enc)) docs.push(d);
-    }
+    let plainDoc: IndexDoc | null = null;
+    if (plainId) plainDoc = parseIndex(text.decode(await this.drive.download(plainId)));
+    // 加密目录解得开时，明文目录不参与合并和写回（能写网盘的人放一份明文目录，就能塞进假照片、假墓碑），
+    // 只把它多出来的条目显示出来。没有加密目录时才以明文目录为准。
+    if (plainDoc && !encDoc) docs.push(plainDoc);
     const merged = mergeDocs(docs);
+    let extra: IndexItem[] = [];
+    if (plainDoc && encDoc) {
+      const have = new Set(merged.items.map((i) => i.r));
+      extra = plainDoc.items.filter((i) => i.r && !i.e && !have.has(i.r) && !merged.deleted.has(i.r) && !plainDoc!.del.includes(i.r));
+    }
     const seen = Number(lsGet(this.seqKey) ?? 0);
+    this.driveSeq = merged.seq;
     this.readOnly = "";
+    this.rolledBack = false;
     if (merged.hasSeq && merged.seq < seen) {
-      this.readOnly = "网盘上的备份目录比这个浏览器上次看到的还旧（可能被还原过），为了不覆盖数据，暂时只能浏览。请先在手机上处理。";
+      this.rolledBack = true;
+      this.readOnly = "网盘上的备份目录比这个浏览器上次看到的旧（手机选了“以网盘为准”，或者被还原过），暂时只能浏览。确认是手机上操作的，可以在设置里点“以网盘为准”。";
     }
     const marker = await readMarker(this.drive);
-    if (marker?.state === "migrating") this.readOnly = "手机正在搬迁这个网盘的存储位置，搬完前网页版只能浏览。";
+    this.migrating = marker?.state === "migrating";
     if (marker?.state === "moved") this.readOnly = "这个库已经搬到别的位置，请刷新页面。";
-    return { merged, encId, plainId };
+    return { merged, encId, plainId, extra };
   }
 
   private apply(p: Pulled) {
     this.merged = p.merged;
     this.encId = p.encId;
-    if (p.merged.hasSeq) lsSet(this.seqKey, String(Math.max(p.merged.seq, Number(lsGet(this.seqKey) ?? 0))));
-    this.items = p.merged.items;
+    if (p.merged.hasSeq && !this.rolledBack) lsSet(this.seqKey, String(Math.max(p.merged.seq, Number(lsGet(this.seqKey) ?? 0))));
+    this.items = p.extra.length ? [...p.merged.items, ...p.extra] : p.merged.items;
+  }
+
+  /** 网盘目录比本机见过的旧，用户确认是手机上操作的：以网盘为准，解除只读。 */
+  async trustDrive() {
+    lsSet(this.seqKey, String(this.driveSeq));
+    await this.load();
+  }
+
+  /**
+   * 用刚从网盘读到的目录确认待写清单：条目已经在目录里（或者已经被删）就不用再写；
+   * 墓碑对应的条目已经不在目录里就算写进去了。只能用读到的目录确认，不能用自己刚写的。
+   */
+  private confirm(m: Merged) {
+    const has = new Set(m.items.map((i) => i.r));
+    const adds = this.pending();
+    const keepAdds = adds.filter((i) => !has.has(i.r) && !m.deleted.has(i.r));
+    if (keepAdds.length !== adds.length) this.setPending(keepAdds);
+    // 墓碑：条目已经不在目录里、文件也都删掉了才算完成
+    const dels = this.pendingDels();
+    const keepDels = dels.filter((d) => has.has(d.r) || d.f.length > 0);
+    if (keepDels.length !== dels.length) this.setPendingDels(keepDels);
+  }
+
+  /** 重新读一次目录，确认待写清单（断开账号前用）。 */
+  async recheck() {
+    await this.lock(async () => {
+      const p = await this.pull();
+      this.confirm(p.merged);
+      this.apply(p);
+    });
+  }
+
+  get pendingAddCount(): number {
+    return this.pending().length;
+  }
+
+  get unconfirmed(): number {
+    return this.pending().length + this.pendingDels().length;
   }
 
   /** 把改动写进网盘目录：重新读一遍、合并、seq + 1、整份写回。 */
-  commit(change: IndexChange): Promise<void> {
+  commit(change: IndexChange, verify = true): Promise<void> {
     return this.lock(async () => {
       const p = await this.pull();
       if (this.readOnly) throw new Error(this.readOnly);
-      const m = applyChange(p.merged, change);
+      // 这里不确认待写清单：刚写完马上读到的可能还是自己写的，手机可能紧接着覆盖。确认放在隔几秒的复查里。
+      // 还没确认写进去的条目和墓碑每次都再带上（手机可能在我们写之后又整份覆盖了目录）
+      const dels = this.pendingDels();
+      const full: IndexChange = {
+        add: [...(change.add ?? []), ...this.pending()],
+        remove: [...(change.remove ?? []), ...dels.map((d) => d.r)],
+        trash: [...(change.trash ?? []), ...dels.flatMap((d) => d.f)].filter((t) => !(change.trashDone ?? []).includes(t)),
+        trashDone: change.trashDone,
+      };
+      const m = applyChange(p.merged, full);
       const key = this.wrapKey();
       const hasEnc = m.items.some((i) => i.e);
       if (hasEnc && !key) throw new Locked();
@@ -286,8 +364,24 @@ export class Account {
         await this.drive.upload(INDEX_PLAIN, bytesSource(data, "application/octet-stream"), { replace: true });
       }
       lsSet(this.seqKey, String(seq));
-      this.apply({ merged: { ...m, seq, hasSeq: true }, encId: encrypt ? (p.encId ?? "new") : p.encId, plainId: p.plainId });
+      this.apply({ merged: { ...m, seq, hasSeq: true }, encId: encrypt ? (p.encId ?? "new") : p.encId, plainId: p.plainId, extra: p.extra });
+      if (verify) this.scheduleVerify();
     });
+  }
+
+  /** 写完隔几秒再读一次目录，确认自己写的没被别的设备覆盖；没看到就补写（最多补几次，之后等下次打开页面）。 */
+  private scheduleVerify(attempt = 0) {
+    if (this.verifyTimer) clearTimeout(this.verifyTimer);
+    if (attempt >= 3) return;
+    this.verifyTimer = setTimeout(() => {
+      this.verifyTimer = null;
+      this.recheck()
+        .then(() => {
+          const lost = this.pending().length || this.pendingDels().some((d) => this.items.some((i) => i.r === d.r));
+          if (lost && !this.readOnly) return this.commit({}, false).then(() => this.scheduleVerify(attempt + 1));
+        })
+        .catch(() => {});
+    }, 10_000);
   }
 
   // ---------- 上传 ----------
@@ -304,16 +398,55 @@ export class Account {
     lsSet(this.pendingKey, list.length ? JSON.stringify(list) : null);
   }
 
-  /** 上次传完文件、还没写进目录的条目（比如中途关了页面）：补写进去，不留孤儿文件。 */
-  async flushPending() {
-    const list = this.pending();
-    if (!list.length || this.readOnly) return;
+  private pendingDels(): PendingDel[] {
     try {
-      await this.commit({ add: list });
-      this.setPending([]);
+      const v = JSON.parse(lsGet(this.pendingDelKey) ?? "[]");
+      return Array.isArray(v) ? v.filter((d) => d && typeof d.r === "string" && Array.isArray(d.f)) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private setPendingDels(list: PendingDel[]) {
+    lsSet(this.pendingDelKey, list.length ? JSON.stringify(list) : null);
+  }
+
+  /** 还没确认写进目录的上传和删除（比如中途关了页面、或者被手机覆盖了）：补写进去，不留孤儿文件。 */
+  async flushPending() {
+    if (!this.unconfirmed || this.readOnly) return;
+    try {
+      await this.dropMissing();
+      await this.commit({});
+      await this.finishDeletes();
     } catch {
       /* 下次再试 */
     }
+  }
+
+  /** 网盘上的存储位置标记：手机开始搬迁或已经搬走，就不再开始新的上传。 */
+  private async checkMarker() {
+    const marker = await readMarker(this.drive);
+    this.migrating = marker?.state === "migrating";
+    if (marker?.state === "moved") this.readOnly = "这个库已经搬到别的位置，请刷新页面。";
+    if (this.readOnly) throw new Error(this.readOnly);
+    if (this.migrating) throw new Error(MIGRATING);
+  }
+
+  /** 补写前确认待写清单里的文件还在（搬迁后旧位置的文件会被清理掉），找不到的不写，记下来提示用户重新上传。 */
+  private async dropMissing() {
+    const list = this.pending();
+    if (!list.length) return;
+    const gone: IndexItem[] = [];
+    for (const i of list) {
+      try {
+        if (!(await this.drive.exists(i.r))) gone.push(i);
+      } catch {
+        /* 查不了就先留着，下次再看 */
+      }
+    }
+    if (!gone.length) return;
+    this.setPending(this.pending().filter((i) => !gone.some((g) => g.r === i.r)));
+    this.lostUploads = [...this.lostUploads, ...gone.map((g) => g.n)];
   }
 
   hasHash(h: string) {
@@ -328,6 +461,7 @@ export class Account {
     f: File, album: string, onProgress: (phase: string, frac: number) => void, signal?: AbortSignal,
   ): Promise<IndexItem | null> {
     if (this.readOnly) throw new Error(this.readOnly);
+    if (this.migrating) throw new Error(MIGRATING);
     const mime = mimeOf(f);
     onProgress("计算指纹", 0);
     const h = await sha256Hex(f, (d) => onProgress("计算指纹", d / Math.max(1, f.size)));
@@ -338,6 +472,8 @@ export class Account {
     const encrypt = this.uploadEncrypted;
     const key = encrypt ? this.wrapKey() : null;
     if (encrypt && !key) throw new Locked();
+    // 每个文件上传前都看一眼存储位置标记，手机开始搬迁后立刻停（不然传上去的文件会被搬迁后的清理删掉）
+    await this.checkMarker();
     const safe = (s: string) => s.replace(/\//g, "_").trim();
     const src = encrypt ? await encryptingSource(f, BlobKind.Original, key!) : plainSource(f, mime);
     const path = encrypt ? [ENCRYPTED_FOLDER, `${toHex(randomBytes(16))}.zylc`] : [safe(album) || "未命名", safe(f.name) || "photo"];
@@ -358,12 +494,10 @@ export class Account {
     return item;
   }
 
-  /** 把待写清单里的条目写进目录。 */
+  /** 把待写清单里的条目写进目录。清单要等之后读目录确认了才清（见 confirm）。 */
   async commitUploads() {
-    const list = this.pending();
-    if (!list.length) return;
-    await this.commit({ add: list });
-    this.setPending(this.pending().filter((p) => !list.some((x) => x.r === p.r)));
+    if (!this.pending().length) return;
+    await this.commit({});
   }
 
   // ---------- 删除 ----------
@@ -371,18 +505,36 @@ export class Account {
   /** 从网盘永久删除：先在目录里写墓碑（别的设备据此删除记录），再删文件；删不掉的留给手机接着删。 */
   async remove(list: IndexItem[]) {
     if (!list.length) return;
-    const files = list.flatMap((i) => [i.r, i.th].filter(Boolean));
-    await this.commit({ remove: list.map((i) => i.r), trash: files });
+    // 先记进本机的待确认墓碑：目录被别的设备覆盖掉时，下次写目录会再带上
+    const dels = this.pendingDels();
+    const added = list.filter((i) => !dels.some((d) => d.r === i.r)).map((i) => ({ r: i.r, f: [i.r, i.th].filter(Boolean) }));
+    this.setPendingDels([...dels, ...added]);
+    try {
+      await this.commit({});
+    } catch (e) {
+      // 这次没删成：不留到以后偷偷删
+      this.setPendingDels(this.pendingDels().filter((d) => !added.some((a) => a.r === d.r)));
+      throw e;
+    }
+    await this.finishDeletes();
+  }
+
+  /** 删掉已经写进墓碑的文件；删不掉的留在 trash 里给手机接着删。 */
+  private async finishDeletes() {
+    const files = this.pendingDels().flatMap((d) => d.f);
+    if (!files.length || this.readOnly) return;
     const done: string[] = [];
     for (const id of files) {
       try {
         await this.drive.delete(id);
         done.push(id);
       } catch {
-        /* 留在 trash 里 */
+        /* 下次再试；404 在 drive 里已经算删掉了 */
       }
     }
-    if (done.length) await this.commit({ trashDone: done }).catch(() => {});
+    if (!done.length) return;
+    this.setPendingDels(this.pendingDels().map((d) => ({ ...d, f: d.f.filter((x) => !done.includes(x)) })));
+    await this.commit({ trashDone: done }).catch(() => {});
   }
 
   // ---------- 读取 ----------
@@ -454,6 +606,7 @@ class Library {
 
   /** 所有照片，按拍摄时间从新到旧；同一张照片备份在几个账号里时只显示一次。 */
   photos = $derived.by(() => {
+    void this.unlocked; // 解锁、上锁后重新挑能打开的那份
     const out: Photo[] = [];
     const byHash = new Map<string, Photo>();
     for (const acc of this.accounts) {
@@ -461,7 +614,15 @@ class Library {
       for (const item of acc.items) {
         const dup = item.h ? byHash.get(item.h) : undefined;
         if (dup) {
-          dup.copies.push({ acc, item });
+          // 同一张照片有几份时，优先用这个浏览器能打开的那份
+          if (!dup.acc.canOpen(dup.item) && acc.canOpen(item)) {
+            dup.copies.push({ acc: dup.acc, item: dup.item });
+            dup.acc = acc;
+            dup.item = item;
+            dup.key = `${acc.key}/${item.r}`;
+          } else {
+            dup.copies.push({ acc, item });
+          }
           continue;
         }
         const p: Photo = { key: `${acc.key}/${item.r}`, acc, item, copies: [] };
@@ -504,12 +665,21 @@ class Library {
     await acc.load();
   }
 
-  disconnect(acc: Account) {
+  /** 断开账号。还有没写进目录的上传或删除时先补写一次，写不进去就报错（[force] 时照样断开）。 */
+  async disconnect(acc: Account, force = false) {
+    if (!force && acc.unconfirmed) {
+      if (acc.state !== "ready" || acc.readOnly) throw new Error(`${acc.label} 还有 ${acc.unconfirmed} 项改动没写进网盘目录。`);
+      await acc.flushPending();
+      await acc.recheck().catch(() => {});
+      if (acc.pendingAddCount) throw new Error(`${acc.label} 还有 ${acc.pendingAddCount} 张刚上传的照片没确认写进网盘目录，现在断开，这些照片在手机上就看不到了。`);
+    }
     removeAccount(acc.key);
-    try {
-      localStorage.removeItem(`zyll-pending-${acc.key}`);
-    } catch {
-      /* ignore */
+    for (const k of [`zyll-pending-${acc.key}`, `zyll-pdel-${acc.key}`]) {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        /* ignore */
+      }
     }
     this.accounts = this.accounts.filter((a) => a !== acc);
   }

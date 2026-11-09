@@ -155,10 +155,12 @@ Zyll 相册/共享/<albumId>/            # albumId：UUID v4；文件夹带 appP
 
 ## 7. 存储位置（Google）
 
-- 设置项“分享功能”：关闭时库放在 `appDataFolder`（隐藏区，不能共享）；开启时整个库搬到 My Drive 下的可见文件夹 `Zyll 相册/`（`drive.file` 权限，文件夹带 `appProperties.zyllVault = <vaultId>`，新设备据此找到它）。
+- 设置项“分享功能”：关闭时库放在 `appDataFolder`（隐藏区，不能共享）；开启时整个库搬到 My Drive 下的可见文件夹 `Zyll 相册/`（`drive.file` 权限，文件夹带 `appProperties.zyllRoot = "1"`，新设备据此找到它）。
 - 搬迁只复制密文（下载后原样上传，不解密），在当地时间 0:00–6:00、充电中、连着不计流量的网络（WiFi）、手机空闲（WorkManager `setRequiresDeviceIdle`）时进行，任一条件中途消失就暂停，下次满足时接着搬，可分多晚完成。
 - 条件不满足就一直等，不催用户，也不提供“立即搬迁”。
-- 搬迁开始前可以改回去；一旦开始，开关锁定，直到搬完才能再改。搬完后改回另一边，就按同样的规则反向再搬一次。状态写进目录的 `settings.storage = { mode: "hidden|visible", state: "pending|migrating|done", at }`，别的设备据此一致。
+- 搬迁开始前可以改回去；一旦开始，开关锁定，直到搬完才能再改。搬完后改回另一边，就按同样的规则反向再搬一次。
+- 别的设备靠存放位置根目录下的 `storage.json` 标记：`{"format":"zyll-storage","version":1,"state":"migrating|moved","to":"visible|hidden","at":毫秒,"device":设备 id}`。
+  看到 `migrating` 的设备不往这个账号写；看到 `moved` 的设备切到新位置，按“换手机”的流程从那里找回备份目录。可见位置的根文件夹带 `appProperties.zyllRoot = "1"`。
 - OneDrive 的应用文件夹本来就是可见的，不需要搬迁。
 
 ## 8. 待实测

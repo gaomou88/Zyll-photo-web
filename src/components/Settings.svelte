@@ -32,8 +32,26 @@
     }
   }
 
-  function disconnect(a: Account) {
-    if (confirm(`在这个浏览器里断开 ${a.label}？网盘里的照片不受影响。`)) library.disconnect(a);
+  async function disconnect(a: Account) {
+    if (!confirm(`在这个浏览器里断开 ${a.label}？网盘里的照片不受影响。`)) return;
+    busy = a.key;
+    try {
+      await library.disconnect(a);
+    } catch (e) {
+      if (confirm(`${(e as Error).message}\n\n建议先别断开，等网络恢复后刷新页面会自动补写。仍然要断开吗？`)) await library.disconnect(a, true);
+    } finally {
+      busy = "";
+    }
+  }
+
+  async function trust(a: Account) {
+    if (!confirm("确认网盘上的目录是手机上“以网盘为准”或你自己还原的？确认后网页按网盘现在的内容继续使用。")) return;
+    busy = a.key;
+    try {
+      await a.trustDrive();
+    } finally {
+      busy = "";
+    }
   }
 
   const stateText: Record<string, string> = { loading: "正在读取…", ready: "已连接", locked: "有加密照片，需要解锁", signin: "登录已过期", error: "出错了" };
@@ -50,6 +68,9 @@
           <div class="muted">{a.where}</div>
           {#if a.error}<div class="error">{a.error}</div>{/if}
           {#if a.readOnly}<div class="error">{a.readOnly}</div>{/if}
+          {#if a.migrating}<div class="error">手机正在搬迁存储位置，搬完前不能往这里上传新照片。</div>{/if}
+          {#if a.lostUploads.length}<div class="error">这些照片在手机搬迁存储位置时丢了，请重新上传：{a.lostUploads.join("、")}</div>{/if}
+          {#if a.rolledBack}<button class="btn text" disabled={busy === a.key} onclick={() => trust(a)}>以网盘为准</button>{/if}
         </div>
         {#if a.state === "signin" || a.state === "error"}
           <button class="btn" disabled={!!busy} onclick={() => reconnect(a)}>{busy === a.key ? "等待登录…" : "重新连接"}</button>
@@ -59,7 +80,7 @@
       </div>
     {/each}
     <div class="row">
-      {#if configured("google")}<button class="btn" disabled={!!busy} onclick={() => connect("google")}><Icon name="plus" size={18} /> {busy === "google" ? "等待登录…" : "添加 Google 云端硬盘"}</button>{/if}
+      {#if configured("google")}<button class="btn" disabled={!!busy} onclick={() => connect("google")}><Icon name="plus" size={18} /> {busy === "google" ? "等待登录…" : "添加 Google 网盘"}</button>{/if}
       {#if configured("onedrive")}<button class="btn" disabled={!!busy} onclick={() => connect("onedrive")}><Icon name="plus" size={18} /> {busy === "onedrive" ? "等待登录…" : "添加 OneDrive"}</button>{/if}
       {#if busy}<button class="btn text" onclick={cancelSignIn}>取消</button>{/if}
     </div>
@@ -91,7 +112,10 @@
     <h2>关于网页版</h2>
     <ul class="muted">
       <li>网页版不做自动备份和 AI 功能（搜索、修图），这些在手机上用。</li>
-      <li>从网页删除的照片只删网盘里的备份。手机上如果还留着这张照片，手机会再备份一次。</li>
+      <li>从网页删除的照片只删网盘里的备份。手机相册里还在的照片，手机会再备份一次；在手机上“释放空间”过或已经删掉的照片，网盘里那份就是唯一一份，删了就没了。</li>
+      <li>网页版上传只传到你选的那一个账号，手机上设的“每种网盘各一份”对网页上传的照片不生效。</li>
+      <li>手机上的敏感画面保护只在手机上生效，网页版会直接显示所有照片，在别人面前打开时请注意。</li>
+      <li>网页版目前只有欢迎页、解锁、删除确认和共享链接支持多语言，其他界面是简体中文。</li>
       <li>登录令牌保存在这个浏览器里，只能访问 Zyll 自己的文件夹；在公用电脑上用完请断开账号。</li>
       <li>Google 的网页登录大约一小时过期，过期后点“重新连接”即可，加密照片不需要重新解锁。</li>
     </ul>
