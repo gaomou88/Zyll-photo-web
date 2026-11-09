@@ -193,4 +193,8 @@ export const table: Record<string, { en: string; ja: string; "zh-Hant": string }
   "需要解锁后才能继续上传": { en: "Unlock to continue uploading", ja: "アップロードを続けるにはロック解除が必要です", "zh-Hant": "需要解鎖後才能繼續上傳" },
   "，{n} 张失败": { en: ", {n} failed", ja: "、{n} 枚失敗", "zh-Hant": "，{n} 張失敗" },
   "，{n} 张已存在": { en: ", {n} already there", ja: "、{n} 枚は既存", "zh-Hant": "，{n} 張已存在" },
+  "Google 没有返回上传地址": { en: "Google did not return an upload URL", ja: "Google がアップロード先を返しませんでした", "zh-Hant": "Google 沒有傳回上傳位址" },
+  "OneDrive 没有返回复制进度地址": { en: "OneDrive did not return a copy progress URL", ja: "OneDrive がコピー進捗の URL を返しませんでした", "zh-Hant": "OneDrive 沒有傳回複製進度位址" },
+  "OneDrive 复制失败": { en: "OneDrive copy failed", ja: "OneDrive でのコピーに失敗しました", "zh-Hant": "OneDrive 複製失敗" },
+  "OneDrive 复制超时": { en: "OneDrive copy timed out", ja: "OneDrive でのコピーがタイムアウトしました", "zh-Hant": "OneDrive 複製逾時" },
 };

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Locked, library, type Account } from "../lib/library.svelte";
+  import { Locked, library, type Account, type NewVault } from "../lib/library.svelte";
   import { passwordProblem } from "../lib/password";
   import { uploads } from "../lib/uploads.svelte";
   import { fmtSize } from "../lib/media";
@@ -32,6 +32,7 @@
   let visible = $state(false);
   let busy = $state(false);
   let recovery = $state<string | null>(null);
+  let vault: NewVault | null = null;
   let saved = $state(false);
   let copied = $state(false);
 
@@ -56,21 +57,50 @@
       busy = true;
       note = "";
       try {
-        recovery = await library.setupAccount(target, {
-          password: enc && !reuse ? pw : undefined,
-          reuse: enc && !!reuse,
-          visible: target.stored.kind === "google" && visible,
-        });
+        if (enc && !reuse) {
+          // 先只在本机生成密钥，让用户抄下恢复密钥、确认后再写进网盘
+          vault = await library.createVault(pw);
+          pw = pw2 = "";
+          recovery = vault.recoveryKey;
+          return;
+        }
+        if (!(await setup())) return;
       } catch (e) {
-        if (e instanceof Locked) onneedunlock();
-        else note = (e as Error).message;
+        note = (e as Error).message;
         return;
       } finally {
         busy = false;
       }
-      pw = pw2 = "";
-      if (recovery) return; // 先让用户抄恢复密钥
     }
+    begin();
+  }
+
+  /** 把选好的设置写进网盘；失败时显示原因，返回 false。 */
+  async function setup(): Promise<boolean> {
+    try {
+      await library.setupAccount(target!, {
+        fresh: vault ?? undefined,
+        reuse: enc && !vault && !!reuse,
+        visible: target!.stored.kind === "google" && visible,
+      });
+      return true;
+    } catch (e) {
+      if (e instanceof Locked) onneedunlock();
+      else note = (e as Error).message;
+      return false;
+    }
+  }
+
+  async function confirmSaved() {
+    busy = true;
+    note = "";
+    try {
+      if (!(await setup())) return;
+    } finally {
+      busy = false;
+    }
+    vault = null;
+    recovery = null;
     begin();
   }
 
@@ -105,9 +135,11 @@
       <p>{t("忘了密码时，只能用这个恢复密钥打开加密的照片。请抄在纸上或存进密码管理器，Zyll 不会再显示它。")}</p>
       <div class="key">{recovery}</div>
       <button class="btn text" style="align-self: flex-start" onclick={copyKey}>{copied ? t("已复制") : t("复制")}</button>
-      <label class="check"><input type="checkbox" bind:checked={saved} /> {t("我已经保存好了")}</label>
+      <label class="check"><input type="checkbox" bind:checked={saved} disabled={busy} /> {t("我已经保存好了")}</label>
+      {#if note}<p class="error">{note}</p>{/if}
       <div class="actions">
-        <button class="btn primary" disabled={!saved} onclick={begin}>{t("开始上传")}</button>
+        <button class="btn" onclick={onclose} disabled={busy}>{t("取消")}</button>
+        <button class="btn primary" disabled={!saved || busy} onclick={confirmSaved}>{busy ? t("正在设置…") : t("开始上传")}</button>
       </div>
     {:else}
     <h2>{t("上传 {n} 个文件", { n: files.length })}</h2>
