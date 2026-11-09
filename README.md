@@ -3,7 +3,7 @@
 Zyll 相册的网页端：在电脑浏览器里查看、上传、下载手机 Zyll 备份到**你自己的** Google 网盘 / OneDrive 里的照片。
 纯静态页面，部署在 GitHub Pages，没有任何自建服务器。端到端加密的照片只在浏览器里解密，网盘服务商看不到内容。
 
-在线地址：<https://gaomou88.github.io/Zyll-photo-web/>
+在线地址：<https://photo.zyll.top/>（旧地址 <https://gaomou88.github.io/Zyll-photo-web/> 会自动跳转过来）
 
 ## 能做什么
 
@@ -33,14 +33,18 @@ Zyll 相册的网页端：在电脑浏览器里查看、上传、下载手机 Zy
 ## 部署配置
 
 1. **Google Cloud**（安卓版用的**同一个项目**，否则读不到手机的备份）：凭据 → 创建 OAuth 客户端 → 类型“网页应用”，
-   - 已获授权的 JavaScript 来源：`https://gaomou88.github.io`
-   - 已获授权的重定向 URI：`https://gaomou88.github.io/Zyll-photo-web/auth-callback.html`
+   - 已获授权的 JavaScript 来源：`https://photo.zyll.top`
+   - 已获授权的重定向 URI：`https://photo.zyll.top/auth-callback.html`
    - 数据访问里确认有 `drive.appdata`、`drive.file`。
 2. **Microsoft Entra**（安卓版用的**同一个应用注册**）：身份验证 → 添加平台 → 单页应用程序，
-   重定向 URI 填 `https://gaomou88.github.io/Zyll-photo-web/auth-callback.html`。
+   重定向 URI 填 `https://photo.zyll.top/auth-callback.html`。
 3. 本仓库 Settings → Secrets and variables → Actions，添加 `ZYLL_GOOGLE_WEB_CLIENT_ID`（第 1 步的客户端 ID）和
    `ZYLL_ONEDRIVE_CLIENT_ID`（Entra 应用的“应用程序(客户端) ID”）。
 4. Settings → Pages → Source 选 **GitHub Actions**。推送到 `main` 后自动部署。
+5. **自定义域名**：在域名服务商给 `photo` 加一条 CNAME 记录指向 `gaomou88.github.io`（不带仓库名），
+   然后 Settings → Pages → Custom domain 填 `photo.zyll.top`，等证书签好后勾上 **Enforce HTTPS**。
+   用 Actions 部署时域名只认这里的设置，仓库里不需要 CNAME 文件。
+   换域名后浏览器里的登录状态和本地缓存不会跟过来（按域名隔离），用户需要重新连接网盘、输入备份密码。
 
 ## 本地开发
 
