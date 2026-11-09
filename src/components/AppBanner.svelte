@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n";
   // 安卓手机打开网页时，提示有 Zyll 安卓版（还在开发测试，下载链接先留空）
   const KEY = "zyll-android-banner";
   const DOWNLOAD_URL = "";
@@ -17,15 +18,15 @@
 {#if isAndroid && !hidden}
   <div class="banner" role="status">
     <div class="text">
-      <strong>手机上用 Zyll 安卓版更好</strong>
-      <span>自动备份、AI 搜索都在 App 里。{DOWNLOAD_URL ? "" : "App 还在开发测试中，很快开放下载。"}</span>
+      <strong>{t("手机上用 Zyll 安卓版更好")}</strong>
+      <span>{t("自动备份、AI 搜索都在 App 里。")}{DOWNLOAD_URL ? "" : t("App 还在开发测试中，很快开放下载。")}</span>
     </div>
     {#if DOWNLOAD_URL}
-      <a class="btn primary" href={DOWNLOAD_URL}>下载</a>
+      <a class="btn primary" href={DOWNLOAD_URL}>{t("下载")}</a>
     {:else}
-      <button class="btn" disabled>即将推出</button>
+      <button class="btn" disabled>{t("即将推出")}</button>
     {/if}
-    <button class="icon-btn" aria-label="关闭" onclick={close}>✕</button>
+    <button class="icon-btn" aria-label={t("关闭")} onclick={close}>✕</button>
   </div>
 {/if}
 

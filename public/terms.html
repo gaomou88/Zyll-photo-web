@@ -10,19 +10,19 @@
 <style>
 :root{color-scheme:light dark;--bg:#faf9f7;--fg:#1f1e1c;--muted:#6f6c66;--accent:#0f7b6c}
 @media (prefers-color-scheme:dark){:root{--bg:#121211;--fg:#ecebe8;--muted:#a19e97;--accent:#4fc3ae}}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.75 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.75 system-ui,-apple-system,"PingFang SC","Hiragino Sans","Microsoft YaHei",sans-serif}
 main{max-width:720px;margin:0 auto;padding:32px 16px 64px}
 h1{font-size:26px;margin:8px 0 4px}h2{font-size:17px;margin:28px 0 6px}
 p,li{margin:6px 0}.muted{color:var(--muted);font-size:13px}a{color:var(--accent)}
+.top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.langs a{margin-left:10px}.langs a[aria-current]{color:var(--fg);text-decoration:none;font-weight:600}
 .sign{margin-top:36px;text-align:right}
 </style>
 </head>
 <body>
 <main>
-<p><a href="./">← 返回 Zyll 相册</a></p>
+<div class="top"><a href="./">← 返回 Zyll 相册</a><span class="langs"><a href="terms.html" aria-current="page" lang="zh-CN">简体中文</a> <a href="terms.zh-Hant.html" lang="zh-Hant">繁體中文</a> <a href="terms.en.html" lang="en">English</a> <a href="terms.ja.html" lang="ja">日本語</a></span></div>
 <h1>使用条款</h1>
 <p class="muted">生效日期：2026 年 11 月 8 日</p>
-
 <p>使用 Zyll 相册（包括网页版和 App）即表示你同意以下条款。</p>
 <h2>1. 服务是什么</h2>
 <p>Zyll 相册是一个帮你管理、备份、查看自己网盘里照片的工具。所有内容都存在你自己的网盘账号里，Zyll 不托管、不查看、也无法访问你的内容。</p>
@@ -36,9 +36,11 @@ p,li{margin:6px 0}.muted{color:var(--muted);font-size:13px}a{color:var(--accent)
 <p>加密照片使用你自己设置的密码保护。我们无法看到、也无法找回你的密码；忘记密码可能导致加密照片永久无法打开。请妥善保管密码，并自行做好重要数据的备份。</p>
 <h2>4. 不作保证</h2>
 <p>Zyll 按“现状”提供，目前仍在开发测试中，可能存在错误或中断。在法律允许的范围内，我们不对数据丢失、损坏、服务中断或因使用本工具造成的任何直接或间接损失承担责任。</p>
-<h2>5. 条款变更</h2>
+<h2>5. 开源</h2>
+<p>Zyll 的源代码基于 GPL-3.0 协议开源。你可以按照该协议使用、修改和分发源代码；本条款不限制你依据该协议享有的权利。</p>
+<h2>6. 条款变更</h2>
 <p>我们可能会更新这些条款，更新后会修改本页面的生效日期。继续使用即表示你接受更新后的条款。</p>
-
+<p class="muted">本条款有多种语言版本，各版本内容不一致时，以简体中文版为准。</p>
 <p class="sign">Zyll Team</p>
 </main>
 </body>

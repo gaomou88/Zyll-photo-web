@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import { t } from "../lib/i18n";
   import { cachedThumb, thumbUrl, whenNear } from "../lib/thumbs";
   import type { Photo } from "../lib/library.svelte";
 
@@ -54,9 +55,9 @@
       </div>
     {/if}
     {#if video}<span class="badge"><Icon name="play" size={14} /></span>{/if}
-    {#if !video && (photo.motion || photo.live)}<span class="badge live" title="动态照片"><Icon name="live" size={14} /></span>{/if}
+    {#if !video && (photo.motion || photo.live)}<span class="badge live" title={t("动态照片")}><Icon name="live" size={14} /></span>{/if}
   </button>
-  <button class="check" class:on={selected} class:show={selecting} aria-label="选择" onclick={(e) => ontoggle(e.shiftKey)}>
+  <button class="check" class:on={selected} class:show={selecting} aria-label={t("选择")} onclick={(e) => ontoggle(e.shiftKey)}>
     <Icon name="check" size={16} />
   </button>
 </div>

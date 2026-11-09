@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { uploads } from "../lib/uploads.svelte";
+  import { t } from "../lib/i18n";
 
   let open = $state(true);
   const total = $derived(uploads.jobs.length);
@@ -14,20 +15,20 @@
     <div class="head">
       <button class="grow" onclick={() => (open = !open)}>
         {#if uploads.running}
-          正在上传 {uploads.done + 1} / {total}
+          {t("正在上传 {d} / {n}", { d: uploads.done + 1, n: total })}
         {:else if uploads.needsUnlock}
-          需要解锁后才能继续上传
+          {t("需要解锁后才能继续上传")}
         {:else if uploads.waiting}
-          已暂停，还有 {uploads.waiting} 个没传
+          {t("已暂停，还有 {n} 个没传", { n: uploads.waiting })}
         {:else}
-          上传完成：{total - failed.length - skipped} 张{#if skipped}，{skipped} 张已存在{/if}{#if failed.length}，{failed.length} 张失败{/if}
+          {t("上传完成：{n} 张", { n: total - failed.length - skipped })}{#if skipped}{t("，{n} 张已存在", { n: skipped })}{/if}{#if failed.length}{t("，{n} 张失败", { n: failed.length })}{/if}
         {/if}
       </button>
       {#if uploads.running}
-        <button class="btn text" onclick={() => uploads.cancel()}>取消</button>
+        <button class="btn text" onclick={() => uploads.cancel()}>{t("取消")}</button>
       {:else}
-        {#if uploads.waiting && !uploads.needsUnlock}<button class="btn text" onclick={() => uploads.resume()}>继续上传</button>{/if}
-        <button class="icon-btn" onclick={() => uploads.clear()} aria-label="关闭"><Icon name="close" size={18} /></button>
+        {#if uploads.waiting && !uploads.needsUnlock}<button class="btn text" onclick={() => uploads.resume()}>{t("继续上传")}</button>{/if}
+        <button class="icon-btn" onclick={() => uploads.clear()} aria-label={t("关闭")}><Icon name="close" size={18} /></button>
       {/if}
     </div>
     {#if uploads.running && current}
@@ -39,7 +40,7 @@
         {#each failed as j}<li><span>{j.file.name}</span><span class="error">{j.error}</span></li>{/each}
       </ul>
     {/if}
-    <p class="muted target">上传到 {uploads.target?.label} · 相簿“{uploads.album}”</p>
+    <p class="muted target">{t("上传到 {acc} · 相簿“{album}”", { acc: uploads.target?.label ?? "", album: uploads.album })}</p>
   </div>
 {/if}
 

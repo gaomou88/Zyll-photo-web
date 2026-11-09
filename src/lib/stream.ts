@@ -1,6 +1,7 @@
 import { BlobKind, ZyllCryptoError, importAesKey, sha256, zylc } from "@zyll/crypto";
 import type { Account } from "./library.svelte";
 import type { IndexItem } from "./indexdoc";
+import { t } from "./i18n";
 
 /**
  * 视频边下边播：把网盘文件登记给 Service Worker（public/sw.js），<video> 的地址指向 __zyll_stream/<token>。
@@ -51,13 +52,13 @@ export async function canStream(): Promise<boolean> {
 /** 登记一个视频，返回给 <video src> 用的地址。 */
 export async function streamUrl(acc: Account, i: IndexItem): Promise<string> {
   const reg = await startServiceWorker();
-  if (!reg?.active) throw new Error("浏览器不支持边下边播");
+  if (!reg?.active) throw new Error(t("浏览器不支持边下边播"));
   const token = crypto.randomUUID();
   const make = async (): Promise<StreamInfo> => {
     const req = await acc.drive.mediaRequest(i.r);
     if (!i.e) return { token, plainLen: i.s, mime: i.m, encrypted: false, ...req };
     const key = acc.wrapKey();
-    if (!key) throw new Error("需要解锁");
+    if (!key) throw new Error(t("需要解锁"));
     const head = await acc.drive.download(i.r, [0, zylc.HEADER_LEN]);
     const h = zylc.decodeHeader(head);
     if (h.kind !== BlobKind.Original) throw new ZyllCryptoError("unexpected blob kind");

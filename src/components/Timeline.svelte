@@ -2,8 +2,9 @@
   import Tile from "./Tile.svelte";
   import { dayKey, dayLabel } from "../lib/media";
   import type { Photo } from "../lib/library.svelte";
+  import { t } from "../lib/i18n";
 
-  let { photos, selected, onopen, ontoggle, ontoggleday, empty = "这里还没有照片" }: {
+  let { photos, selected, onopen, ontoggle, ontoggleday, empty = t("这里还没有照片") }: {
     photos: Photo[];
     selected: Set<string>;
     onopen: (index: number) => void;
@@ -55,7 +56,7 @@
     {@const all = g.items.every((p) => selected.has(p.key))}
     <section class="day">
       <h3>
-        <button class="daycheck" class:on={all} class:show={selecting} onclick={() => ontoggleday(g.items.map((p) => p.key))} aria-label="选择这一天">✓</button>
+        <button class="daycheck" class:on={all} class:show={selecting} onclick={() => ontoggleday(g.items.map((p) => p.key))} aria-label={t("选择这一天")}>✓</button>
         {g.label}
       </h3>
       <div class="grid">

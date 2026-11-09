@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import { t } from "../lib/i18n";
   import { cachedThumb } from "../lib/thumbs";
   import { fmtSize, fmtTime, heicToJpeg } from "../lib/media";
   import { canStream, dropStream, streamUrl } from "../lib/stream";
@@ -63,7 +64,7 @@
         const v = await fromRaw(await rawP);
         if (v) return v;
         if (fromLive) return fromLive();
-        throw new Error("这张照片里没找到动态视频");
+        throw new Error(t("这张照片里没找到动态视频"));
       };
     }
     // 先显示缩略图（用局部变量判断，不读 url，避免它成为这个 effect 的依赖）
@@ -75,7 +76,7 @@
     (async () => {
       try {
         if (!p.acc.canOpen(p.item)) {
-          throw new Error(p.acc.wrapKey() ? "这张照片用以前的密钥加密，手机上转换完成后就能看" : "这张照片是加密的，请先解锁");
+          throw new Error(p.acc.wrapKey() ? t("这张照片用以前的密钥加密，手机上转换完成后就能看") : t("这张照片是加密的，请先解锁"));
         }
         if (p.item.m.startsWith("video/")) {
           if (await canStream()) {
@@ -173,16 +174,16 @@
 {#if photo}
   <div class="viewer" role="dialog" aria-modal="true" aria-label={photo.item.n}>
     <div class="bar">
-      <button class="icon-btn" onclick={onclose} aria-label="关闭"><Icon name="back" /></button>
+      <button class="icon-btn" onclick={onclose} aria-label={t("关闭")}><Icon name="back" /></button>
       <span class="title">{photo.item.n}</span>
       {#if motion}
-        <button class="icon-btn" class:on={!!motionUrl} onclick={playMotion} aria-label={motionUrl ? "停止播放动态照片" : "播放动态照片"} title="动态照片">
+        <button class="icon-btn" class:on={!!motionUrl} onclick={playMotion} aria-label={motionUrl ? t("停止播放动态照片") : t("播放动态照片")} title={t("动态照片")}>
           <Icon name="live" />
         </button>
       {/if}
-      <button class="icon-btn" onclick={() => (showInfo = !showInfo)} aria-label="信息"><Icon name="info" /></button>
-      <button class="icon-btn" onclick={() => ondownload(photo)} aria-label="下载"><Icon name="download" /></button>
-      <button class="icon-btn" onclick={() => ondelete(photo)} aria-label="删除"><Icon name="trash" /></button>
+      <button class="icon-btn" onclick={() => (showInfo = !showInfo)} aria-label={t("信息")}><Icon name="info" /></button>
+      <button class="icon-btn" onclick={() => ondownload(photo)} aria-label={t("下载")}><Icon name="download" /></button>
+      <button class="icon-btn" onclick={() => ondelete(photo)} aria-label={t("删除")}><Icon name="trash" /></button>
     </div>
     <div class="stage" ontouchstart={ts} ontouchend={te}>
       {#if kind === "video" && url}
@@ -199,7 +200,7 @@
           onclick={() => (motionUrl = null)}
           onerror={() => {
             motionUrl = null;
-            motionError = motionFrom ? `这个浏览器播放不了这段视频，可以下载 ${motionFrom} 在手机上看` : "这个浏览器播放不了这段视频，可以下载原图在手机上看";
+            motionError = motionFrom ? t("这个浏览器播放不了这段视频，可以下载 {name} 在手机上看", { name: motionFrom }) : t("这个浏览器播放不了这段视频，可以下载原图在手机上看");
           }}
         ></video>
       {/if}
@@ -209,22 +210,22 @@
       {#if error}
         <div class="msg"><Icon name="warn" /> {error}</div>
       {:else if loading || motionBusy}
-        <div class="spinner" aria-label="加载中"></div>
+        <div class="spinner" aria-label={t("加载中")}></div>
       {/if}
-      {#if index > 0}<button class="nav left" onclick={prev} aria-label="上一张"><Icon name="left" size={28} /></button>{/if}
-      {#if index < photos.length - 1}<button class="nav right" onclick={next} aria-label="下一张"><Icon name="right" size={28} /></button>{/if}
+      {#if index > 0}<button class="nav left" onclick={prev} aria-label={t("上一张")}><Icon name="left" size={28} /></button>{/if}
+      {#if index < photos.length - 1}<button class="nav right" onclick={next} aria-label={t("下一张")}><Icon name="right" size={28} /></button>{/if}
     </div>
     {#if showInfo}
       <aside class="info">
-        <h3>详细信息</h3>
+        <h3>{t("详细信息")}</h3>
         <dl>
-          <dt>拍摄时间</dt><dd>{photo.item.t ? fmtTime(photo.item.t) : "未知"}</dd>
-          <dt>文件名</dt><dd>{photo.item.n}</dd>
-          <dt>大小</dt><dd>{fmtSize(photo.item.s)}</dd>
-          <dt>相簿</dt><dd>{photo.item.a || "未命名"}</dd>
-          <dt>存放位置</dt><dd>{photo.acc.label}{#each photo.copies as c}<br />{c.acc.label}{/each}</dd>
-          <dt>端到端加密</dt><dd>{photo.item.e ? "是" : "否"}</dd>
-          {#if motion}<dt>动态照片</dt><dd>{photo.live ? `是（实况照片，配对 ${photo.live.item.n}）` : "是（视频在原图里）"}</dd>{/if}
+          <dt>{t("拍摄时间")}</dt><dd>{photo.item.t ? fmtTime(photo.item.t) : t("未知")}</dd>
+          <dt>{t("文件名")}</dt><dd>{photo.item.n}</dd>
+          <dt>{t("大小")}</dt><dd>{fmtSize(photo.item.s)}</dd>
+          <dt>{t("相簿")}</dt><dd>{photo.item.a || t("未命名")}</dd>
+          <dt>{t("存放位置")}</dt><dd>{photo.acc.label}{#each photo.copies as c}<br />{c.acc.label}{/each}</dd>
+          <dt>{t("端到端加密")}</dt><dd>{photo.item.e ? t("是") : t("否")}</dd>
+          {#if motion}<dt>{t("动态照片")}</dt><dd>{photo.live ? t("是（实况照片，配对 {name}）", { name: photo.live.item.n }) : t("是（视频在原图里）")}</dd>{/if}
         </dl>
       </aside>
     {/if}

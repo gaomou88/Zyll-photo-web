@@ -61,6 +61,11 @@ async function picture(w: number, h: number, hue: number, label: string): Promis
   return new Promise((r) => c.toBlob((b) => r(b!), "image/jpeg", 0.9));
 }
 
+/** 一个什么都没有的网盘（测试首次上传）。 */
+export function emptyDrive(): MemoryDrive {
+  return new MemoryDrive({ key: "onedrive:empty", kind: "onedrive", accountId: "empty", email: "empty@example.com", accessToken: "x", expiresAt: Date.now() + 1e9 });
+}
+
 /** 造一个开着端到端加密的库：密码 test1234，几十张照片。 */
 export async function demoDrive(): Promise<MemoryDrive> {
   const acc: StoredAccount = { key: "onedrive:demo", kind: "onedrive", accountId: "demo", email: "demo@example.com", accessToken: "x", expiresAt: Date.now() + 1e9 };

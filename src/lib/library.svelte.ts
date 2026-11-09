@@ -7,6 +7,7 @@ import { isHeic, makeThumbnail, mimeOf, sha256Hex, takenAt } from "./media";
 import { blobReader, findMotionVideo, livePairKey, mayHaveMotion } from "./motion";
 import { bytesSource, decryptKind, encryptingSource, plainSource } from "./zylcio";
 import { runKdf } from "../kdf";
+import { t } from "./i18n";
 
 /**
  * 网页版的“库”：每个已连接的网盘账号读一份备份目录，合在一起显示。
@@ -51,7 +52,7 @@ async function step<T>(label: string, job: () => Promise<T>): Promise<T> {
     return await job();
   } catch (e) {
     if (e instanceof Locked || e instanceof NeedsSignIn) throw e;
-    const err = new Error(`${label}失败：${(e as Error).message || e}`);
+    const err = new Error(t("{step}失败：{msg}", { step: label, msg: (e as Error).message || String(e) }));
     err.cause = e;
     throw err;
   }
@@ -70,11 +71,11 @@ async function readMarker(d: Drive): Promise<{ state: string; to: string; at: nu
   }
 }
 
-const MIGRATING = "手机正在搬迁这个网盘的存储位置，搬完前网页版不能在这里上传或删除照片。";
+const MIGRATING = () => t("手机正在搬迁这个网盘的存储位置，搬完前网页版不能在这里上传或删除照片。");
 
 export class Locked extends Error {
   constructor() {
-    super("需要解锁");
+    super(t("需要解锁"));
   }
 }
 
@@ -134,18 +135,19 @@ export class Account {
   private missingAtLoad = false;
   private verifyTimer: ReturnType<typeof setTimeout> | null = null;
   private encId: string | null = null;
+  private plainId: string | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(public stored: StoredAccount) {
     this.drive = stored.kind === "google" ? new GoogleDrive(stored) : new OneDrive(stored);
-    this.where = stored.kind === "google" ? "Google 网盘 · 隐藏区" : "OneDrive · 应用/Zyll 相册";
+    this.where = stored.kind === "google" ? t("Google 网盘 · 隐藏区") : t("OneDrive · 应用/Zyll 相册");
   }
 
   get key() {
     return this.stored.key;
   }
   get label() {
-    return `${this.stored.kind === "google" ? "Google 网盘" : "OneDrive"}（${this.stored.email}）`;
+    return t("acc.label", { drive: this.stored.kind === "google" ? t("Google 网盘") : "OneDrive", email: this.stored.email });
   }
 
   get bundleVaultId(): string | null {
@@ -178,6 +180,56 @@ export class Account {
     return !!this.encId || this.items.some((i) => i.e) || !!this.bundleJson;
   }
 
+  /**
+   * 全新的账号：网盘里还没有 Zyll 的备份目录和密钥包。第一次上传前让用户选要不要加密、放在哪里。
+   */
+  get isFresh(): boolean {
+    return this.state === "ready" && !this.readOnly && !this.encId && !this.plainId && !this.bundleJson && this.items.length === 0;
+  }
+
+  /**
+   * 首次设置。[password] 不为空时新建密钥包；[reuseFrom] 是已经解锁的另一个账号，用同一套密钥（和 App 一样一个人只用一套）。
+   * [visible] 为 true 时（只限 Google）把库放在可见的“Zyll 相册/”文件夹，以后可以共享相册；
+   * 同时在隐藏区写 storage.json（moved → visible），这样 App 第一次连上时会直接去可见文件夹找。
+   * 返回新建的恢复密钥（要让用户抄下来），没新建时返回 null。
+   */
+  async setup(opts: { password?: string; reuseFrom?: Account; visible: boolean }): Promise<string | null> {
+    let recovery: string | null = null;
+    await this.lock(async () => {
+      // 再确认一次网盘里确实还是空的（防止手机刚好同时在建）
+      if (this.drive instanceof GoogleDrive) await this.resolveGoogleRoot();
+      if ((await this.drive.findFile(KEYBUNDLE_PATH)) || (await this.drive.findFile(INDEX_ENCRYPTED)) || (await this.drive.findFile(INDEX_PLAIN))) {
+        throw new Error(t("网盘里已经有 Zyll 的备份了，请刷新页面。"));
+      }
+      if (opts.visible && this.drive instanceof GoogleDrive && (this.drive as GoogleDrive).root === "appDataFolder") {
+        const hidden = this.drive as GoogleDrive;
+        const id = (await GoogleDrive.findVisibleRoot(this.stored)) ?? (await GoogleDrive.createVisibleRoot(this.stored));
+        const marker = { format: "zyll-storage", version: 1, state: "moved", to: "visible", at: Date.now(), device: deviceId };
+        await hidden.upload(["storage.json"], bytesSource(utf8.encode(JSON.stringify(marker)), "application/json"), { replace: true });
+        this.drive = new GoogleDrive(this.stored, id);
+        this.where = t("Google 网盘 · 我的云端硬盘/{folder}", { folder: VISIBLE_ROOT });
+      }
+      let json: string | null = null;
+      if (opts.reuseFrom) {
+        json = opts.reuseFrom.bundleJson;
+        if (!json || !opts.reuseFrom.wrapKey()) throw new Locked();
+      } else if (opts.password) {
+        const r = await runKdf({ op: "create", password: opts.password });
+        const v = await keybundle.vaultFromMasterKey(r.vaultId, r.masterKey);
+        keyring.set(v.vaultId, v.wrapKey);
+        json = r.json!;
+        recovery = r.recoveryKey!;
+      }
+      if (json) {
+        await this.drive.upload(KEYBUNDLE_PATH, bytesSource(utf8.encode(json), "application/json"), { replace: true });
+        this.bundleJson = json;
+      }
+    });
+    // 开了加密就马上写一份加密的空目录（带 mode），手机和别的浏览器据此知道这个账号是加密的
+    if (this.bundleJson) await this.commit({ mode: { enc: true, at: Date.now() } });
+    return recovery;
+  }
+
   /** 操作中途登录过期：切到“需要重新连接”状态，界面会显示提示条。 */
   noteError(e: unknown) {
     if (e instanceof NeedsSignIn) this.state = "signin";
@@ -204,10 +256,10 @@ export class Account {
     this.error = "";
     try {
       await this.lock(async () => {
-        if (this.drive instanceof GoogleDrive) await step("查找存放位置", () => this.resolveGoogleRoot());
-        const id = await step("查找密钥包", () => this.drive.findFile(KEYBUNDLE_PATH));
-        this.bundleJson = id ? await step("读取密钥包", async () => text.decode(await this.drive.download(id))) : null;
-        const p = await step("读取备份目录", () => this.pull());
+        if (this.drive instanceof GoogleDrive) await step(t("查找存放位置"), () => this.resolveGoogleRoot());
+        const id = await step(t("查找密钥包"), () => this.drive.findFile(KEYBUNDLE_PATH));
+        this.bundleJson = id ? await step(t("读取密钥包"), async () => text.decode(await this.drive.download(id))) : null;
+        const p = await step(t("读取备份目录"), () => this.pull());
         this.missingAtLoad = this.confirm(p.merged);
         this.apply(p);
       });
@@ -243,10 +295,10 @@ export class Account {
     const at = (where: "hidden" | "visible") => {
       if (where === "visible" && visibleId) {
         this.drive = new GoogleDrive(this.stored, visibleId);
-        this.where = `Google 网盘 · 我的云端硬盘/${VISIBLE_ROOT}`;
+        this.where = t("Google 网盘 · 我的云端硬盘/{folder}", { folder: VISIBLE_ROOT });
       } else {
         this.drive = hidden;
-        this.where = "Google 网盘 · 隐藏区";
+        this.where = t("Google 网盘 · 隐藏区");
       }
     };
     at("hidden");
@@ -271,7 +323,7 @@ export class Account {
       try {
         plain = await decryptKind(await this.drive.download(encId), key, BlobKind.IndexSnapshot);
       } catch {
-        throw new Error("加密的备份目录用这个密码解不开（可能是另一套密钥），请先在手机上处理");
+        throw new Error(t("加密的备份目录用这个密码解不开（可能是另一套密钥），请先在手机上处理"));
       }
       encDoc = parseIndex(text.decode(plain));
       docs.push(encDoc);
@@ -293,7 +345,7 @@ export class Account {
     this.rolledBack = false;
     if (merged.hasSeq && merged.seq < seen) {
       this.rolledBack = true;
-      this.readOnly = "网盘上的备份目录比这个浏览器上次看到的旧（手机选了“以网盘为准”，或者被还原过），暂时只能浏览。确认是手机上操作的，可以在设置里点“以网盘为准”。";
+      this.readOnly = t("网盘上的备份目录比这个浏览器上次看到的旧（手机选了“以网盘为准”，或者被还原过），暂时只能浏览。确认是手机上操作的，可以在设置里点“以网盘为准”。");
     }
     this.noteMarker(await readMarker(this.drive));
     return { merged, encId, plainId, extra };
@@ -302,6 +354,7 @@ export class Account {
   private apply(p: Pulled) {
     this.merged = p.merged;
     this.encId = p.encId;
+    this.plainId = p.plainId;
     if (p.merged.hasSeq && !this.rolledBack) lsSet(this.seqKey, String(Math.max(p.merged.seq, Number(lsGet(this.seqKey) ?? 0))));
     this.items = p.extra.length ? [...p.merged.items, ...p.extra] : p.merged.items;
   }
@@ -370,6 +423,7 @@ export class Account {
         remove: [...(change.remove ?? []), ...dels.map((d) => d.r)],
         trash: [...(change.trash ?? []), ...dels.flatMap((d) => d.f)].filter((t) => !(change.trashDone ?? []).includes(t)),
         trashDone: change.trashDone,
+        mode: change.mode,
       };
       const m = applyChange(p.merged, full);
       const key = this.wrapKey();
@@ -462,7 +516,7 @@ export class Account {
   private async checkMarker() {
     this.noteMarker(await readMarker(this.drive));
     if (this.readOnly) throw new Error(this.readOnly);
-    if (this.migrating) throw new Error(MIGRATING);
+    if (this.migrating) throw new Error(MIGRATING());
   }
 
   private get ignoreKey() {
@@ -474,7 +528,7 @@ export class Account {
    * 搬的手机每 10 分钟刷新 at，超过 3 天没变时允许用户“不再等它”（只认这一份 at，变了就重新等）。
    */
   private noteMarker(marker: { state: string; at: number } | null) {
-    if (marker?.state === "moved") this.readOnly = "这个库已经搬到别的位置，请刷新页面。";
+    if (marker?.state === "moved") this.readOnly = t("这个库已经搬到别的位置，请刷新页面。");
     const mig = marker?.state === "migrating";
     this.markerAt = mig ? marker!.at : 0;
     const ignored = mig && marker!.at > 0 && lsGet(this.ignoreKey) === String(marker!.at);
@@ -520,15 +574,15 @@ export class Account {
     f: File, album: string, onProgress: (phase: string, frac: number) => void, signal?: AbortSignal,
   ): Promise<IndexItem | null> {
     if (this.readOnly) throw new Error(this.readOnly);
-    if (this.migrating) throw new Error(MIGRATING);
+    if (this.migrating) throw new Error(MIGRATING());
     const mime = mimeOf(f);
-    onProgress("计算指纹", 0);
-    const h = await sha256Hex(f, (d) => onProgress("计算指纹", d / Math.max(1, f.size)));
+    onProgress(t("计算指纹"), 0);
+    const h = await sha256Hex(f, (d) => onProgress(t("计算指纹"), d / Math.max(1, f.size)));
     if (this.hasHash(h) || this.pending().some((i) => i.h === h)) return null;
-    const t = await takenAt(f, mime);
+    const when = await takenAt(f, mime);
     // 动态照片：文件原样上传（视频跟着走），这里只是在目录里标一下，照片墙上好显示标记
     const mo = mayHaveMotion(mime, f.name) && !!(await findMotionVideo(blobReader(f), f.size, true).catch(() => null));
-    onProgress("生成缩略图", 0);
+    onProgress(t("生成缩略图"), 0);
     const thumb = await makeThumbnail(f, mime, f.name);
     const encrypt = this.uploadEncrypted;
     const key = encrypt ? this.wrapKey() : null;
@@ -538,7 +592,7 @@ export class Account {
     const safe = (s: string) => s.replace(/\//g, "_").trim();
     const src = encrypt ? await encryptingSource(f, BlobKind.Original, key!) : plainSource(f, mime);
     const path = encrypt ? [ENCRYPTED_FOLDER, `${toHex(randomBytes(16))}.zylc`] : [safe(album) || "未命名", safe(f.name) || "photo"];
-    const r = await this.drive.upload(path, src, { signal, onProgress: (n) => onProgress("上传", n / src.size) });
+    const r = await this.drive.upload(path, src, { signal, onProgress: (n) => onProgress(t("上传"), n / src.size) });
     let th = "";
     if (thumb) {
       try {
@@ -550,7 +604,7 @@ export class Account {
         // 缩略图传失败不要紧：手机会自己补
       }
     }
-    const item: IndexItem = { r, e: encrypt, n: f.name, a: album, m: mime, t, s: f.size, h, th, d: deviceId, k: "", ...(mo ? { mo: true } : {}) };
+    const item: IndexItem = { r, e: encrypt, n: f.name, a: album, m: mime, t: when, s: f.size, h, th, d: deviceId, k: "", ...(mo ? { mo: true } : {}) };
     this.setPending([...this.pending(), item]);
     return item;
   }
@@ -616,7 +670,7 @@ export class Account {
     }
     if (i.h) {
       const got = toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", data as Uint8Array<ArrayBuffer>)));
-      if (got !== i.h.toLowerCase()) throw new Error("文件内容和备份记录对不上（可能被替换过），已拒绝显示");
+      if (got !== i.h.toLowerCase()) throw new Error(t("文件内容和备份记录对不上（可能被替换过），已拒绝显示"));
     }
     return new Blob([data as Uint8Array<ArrayBuffer>], { type: i.m || "application/octet-stream" });
   }
@@ -661,12 +715,17 @@ class Library {
 
   async loadAll() {
     if (import.meta.env.DEV && new URLSearchParams(location.search).has("demo")) {
-      const { demoDrive } = await import("./demo");
-      const d = await demoDrive();
-      const acc = new Account(d.account);
-      acc.drive = d;
-      this.accounts = [acc];
-      (window as unknown as { demoDrive: unknown }).demoDrive = d;
+      // ?demo：加密的演示库；?demo=empty：一个空网盘；?demo=two：加密的 + 空的
+      const { demoDrive, emptyDrive } = await import("./demo");
+      const mode = new URLSearchParams(location.search).get("demo");
+      const drives = mode === "empty" ? [emptyDrive()] : mode === "two" ? [await demoDrive(), emptyDrive()] : [await demoDrive()];
+      this.accounts = drives.map((d) => {
+        const acc = new Account(d.account);
+        acc.drive = d;
+        return acc;
+      });
+      (window as unknown as { demoDrive: unknown; demoDrives: unknown }).demoDrive = drives[0];
+      (window as unknown as { demoDrives: unknown }).demoDrives = drives;
     }
     return Promise.all(this.accounts.map((a) => a.load()));
   }
@@ -722,6 +781,20 @@ class Library {
     return this.accounts.some((a) => a.bundleJson);
   }
 
+  /** 已经解锁、可以给新账号沿用的那套密钥所在的账号 */
+  unlockedVaultAccount(except?: Account): Account | null {
+    return this.accounts.find((a) => a !== except && a.bundleJson && a.wrapKey()) ?? null;
+  }
+
+  /** 新账号的首次设置（见 Account.setup）；返回要抄下来的恢复密钥。 */
+  async setupAccount(acc: Account, opts: { password?: string; reuse?: boolean; visible: boolean }): Promise<string | null> {
+    const reuseFrom = opts.reuse ? (this.unlockedVaultAccount(acc) ?? undefined) : undefined;
+    if (opts.reuse && !reuseFrom) throw new Locked();
+    const r = await acc.setup({ password: opts.password, reuseFrom, visible: opts.visible });
+    if (acc.bundleJson) this.unlocked = true;
+    return r;
+  }
+
   async connect(kind: DriveKind) {
     const stored = await authSignIn(kind);
     const existing = this.accounts.find((a) => a.key === stored.key);
@@ -748,13 +821,13 @@ class Library {
   /** 断开账号。还有没写进目录的上传或删除时先补写一次，写不进去就报错（[force] 时照样断开）。 */
   async disconnect(acc: Account, force = false) {
     if (!force && acc.unconfirmed) {
-      if (acc.state !== "ready" || acc.readOnly) throw new Error(`${acc.label} 还有 ${acc.unconfirmed} 项改动没写进网盘目录。`);
+      if (acc.state !== "ready" || acc.readOnly) throw new Error(t("{name} 还有 {n} 项改动没写进网盘目录。", { name: acc.label, n: acc.unconfirmed }));
       await acc.flushPending();
       const missing = await acc.recheck().catch(() => true);
       if (!acc.unconfirmed) {
         /* 都确认了，可以断开 */
-      } else if (missing) throw new Error(`${acc.label} 还有 ${acc.unconfirmed} 项改动没写进网盘目录，现在断开，刚上传的照片在手机上会看不到，删除的照片也可能回来。`);
-      else throw new Error(`${acc.label} 刚才的改动已经写进网盘目录，但还没等到手机确认。手机如果正好在同时写目录，可能会把它们覆盖掉，过几分钟再断开更稳妥。`);
+      } else if (missing) throw new Error(t("{name} 还有 {n} 项改动没写进网盘目录，现在断开，刚上传的照片在手机上会看不到，删除的照片也可能回来。", { name: acc.label, n: acc.unconfirmed }));
+      else throw new Error(t("{name} 刚才的改动已经写进网盘目录，但还没等到手机确认。手机如果正好在同时写目录，可能会把它们覆盖掉，过几分钟再断开更稳妥。", { name: acc.label }));
     }
     removeAccount(acc.key);
     acc.dispose();
@@ -775,7 +848,7 @@ class Library {
       const id = a.bundleVaultId;
       if (id && a.bundleJson && !keyring.has(id)) bundles.set(id, a.bundleJson);
     }
-    if (!bundles.size) throw new Error("网盘里没有找到密钥包");
+    if (!bundles.size) throw new Error(t("网盘里没有找到密钥包"));
     let ok = 0;
     let lastErr: Error | null = null;
     for (const [, json] of bundles) {
@@ -788,7 +861,7 @@ class Library {
         lastErr = e as Error;
       }
     }
-    if (!ok) throw lastErr ?? new Error("密码或恢复密钥不正确");
+    if (!ok) throw lastErr ?? new Error(t("密码或恢复密钥不正确"));
     this.unlocked = true;
     await Promise.all(this.accounts.filter((a) => a.state !== "ready" || a.items.some((i) => i.e)).map((a) => a.load()));
   }

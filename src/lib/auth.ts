@@ -1,4 +1,5 @@
 import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, ONEDRIVE_CLIENT_ID, ONEDRIVE_SCOPES, redirectUri } from "./config";
+import { t } from "./i18n";
 
 /**
  * 纯前端登录（没有自建服务器）。
@@ -24,14 +25,14 @@ export interface StoredAccount {
 const STORE = "zyll-accounts";
 
 export class NeedsSignIn extends Error {
-  constructor(readonly account: StoredAccount, message = "登录已过期，请重新连接") {
+  constructor(readonly account: StoredAccount, message = t("登录已过期，请重新连接")) {
     super(message);
   }
 }
 
 export class AuthCancelled extends Error {
   constructor() {
-    super("登录已取消");
+    super(t("登录已取消"));
   }
 }
 
@@ -85,11 +86,11 @@ export function cancelSignIn() {
 /** 打开登录弹窗，等回调页把结果（查询串 + 片段）广播回来。 */
 function popup(url: string, state: string): Promise<URLSearchParams> {
   const w = window.open(url, "zyll-auth", "popup,width=520,height=680");
-  if (!w) return Promise.reject(new Error("浏览器拦截了登录窗口，请允许本网站弹出窗口后再试"));
+  if (!w) return Promise.reject(new Error(t("浏览器拦截了登录窗口，请允许本网站弹出窗口后再试")));
   return new Promise((resolve, reject) => {
     const ch = new BroadcastChannel("zyll-auth");
     // 不轮询 w.closed：Google / 微软的登录页带 COOP，跨源后 closed 会误报
-    const timer = setTimeout(() => done(new Error("登录超时，请重试")), 10 * 60_000);
+    const timer = setTimeout(() => done(new Error(t("登录超时，请重试"))), 10 * 60_000);
     const done = (err: Error | null, p?: URLSearchParams) => {
       clearTimeout(timer);
       ch.close();
@@ -128,12 +129,12 @@ async function googleToken(loginHint?: string, silent = false): Promise<{ token:
   if (!silent) u.searchParams.set("prompt", "select_account");
   const p = await popup(u.toString(), state);
   const err = p.get("error");
-  if (err) throw new Error(err === "access_denied" ? "没有授权，已取消" : `Google 登录失败：${err}`);
+  if (err) throw new Error(err === "access_denied" ? t("没有授权，已取消") : t("Google 登录失败：{msg}", { msg: err }));
   const token = p.get("access_token");
-  if (!token) throw new Error("Google 没有返回访问令牌");
+  if (!token) throw new Error(t("Google 没有返回访问令牌"));
   const granted = (p.get("scope") ?? "").split(" ");
   if (!granted.includes(GOOGLE_SCOPES[0]!)) {
-    throw new Error("需要勾选“查看和管理 Zyll 在 Google 云端硬盘中的应用数据”才能读取手机的备份，请重新连接并勾选");
+    throw new Error(t("需要勾选“查看和管理 Zyll 在 Google 云端硬盘中的应用数据”才能读取手机的备份，请重新连接并勾选"));
   }
   return { token, expiresAt: Date.now() + (Number(p.get("expires_in") ?? 3600) - 120) * 1000 };
 }
@@ -142,7 +143,7 @@ async function googleProfile(token: string): Promise<{ id: string; email: string
   const r = await fetch("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress,permissionId)", {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!r.ok) throw new Error(`读取 Google 账号失败（HTTP ${r.status}）`);
+  if (!r.ok) throw new Error(t("读取 Google 账号失败（HTTP {code}）", { code: r.status }));
   const o = await r.json();
   return { id: o.user?.permissionId ?? "", email: o.user?.emailAddress ?? "" };
 }
@@ -159,7 +160,7 @@ async function msTokenRequest(body: Record<string, string>): Promise<{ access_to
   });
   const o = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const e = new Error(o.error_description?.split("\r\n")[0] ?? `微软登录失败（HTTP ${r.status}）`) as Error & { code?: string };
+    const e = new Error(o.error_description?.split("\r\n")[0] ?? t("微软登录失败（HTTP {code}）", { code: r.status })) as Error & { code?: string };
     e.code = o.error;
     throw e;
   }
@@ -183,9 +184,9 @@ async function oneDriveSignIn(loginHint?: string) {
   if (loginHint) u.searchParams.set("login_hint", loginHint);
   const p = await popup(u.toString(), state);
   const err = p.get("error");
-  if (err) throw new Error(err === "access_denied" ? "没有授权，已取消" : `微软登录失败：${p.get("error_description") ?? err}`);
+  if (err) throw new Error(err === "access_denied" ? t("没有授权，已取消") : t("微软登录失败：{msg}", { msg: p.get("error_description") ?? err }));
   const code = p.get("code");
-  if (!code) throw new Error("微软没有返回授权码");
+  if (!code) throw new Error(t("微软没有返回授权码"));
   return msTokenRequest({ grant_type: "authorization_code", code, redirect_uri: redirectUri(), code_verifier: verifier });
 }
 
@@ -193,7 +194,7 @@ async function oneDriveProfile(token: string): Promise<{ id: string; email: stri
   const r = await fetch("https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName", {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!r.ok) throw new Error(`读取微软账号失败（HTTP ${r.status}）`);
+  if (!r.ok) throw new Error(t("读取微软账号失败（HTTP {code}）", { code: r.status }));
   const o = await r.json();
   return { id: o.id ?? "", email: o.mail || o.userPrincipalName || o.displayName || "" };
 }
@@ -202,7 +203,7 @@ async function oneDriveProfile(token: string): Promise<{ id: string; email: stri
 
 /** 连接一个新账号（或重新连接已有账号），返回保存好的账号。 */
 export async function signIn(kind: DriveKind, existing?: StoredAccount): Promise<StoredAccount> {
-  if (!configured(kind)) throw new Error("这个网页版没有配置该网盘的客户端 ID");
+  if (!configured(kind)) throw new Error(t("这个网页版没有配置该网盘的客户端 ID"));
   let acc: StoredAccount;
   if (kind === "google") {
     const t = await googleToken(existing?.email, !!existing);
@@ -216,7 +217,7 @@ export async function signIn(kind: DriveKind, existing?: StoredAccount): Promise
       accessToken: t.access_token, refreshToken: t.refresh_token, expiresAt: Date.now() + (t.expires_in - 120) * 1000,
     };
   }
-  if (existing && existing.key !== acc.key) throw new Error(`登录的是另一个账号（${acc.email}），请用 ${existing.email} 登录`);
+  if (existing && existing.key !== acc.key) throw new Error(t("登录的是另一个账号（{got}），请用 {want} 登录", { got: acc.email, want: existing.email }));
   saveAccount(acc);
   return acc;
 }

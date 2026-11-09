@@ -1,7 +1,8 @@
 /**
- * 网页版的多语言：先覆盖别人最可能先看到的几处（欢迎页、共享链接、解锁、删除确认），
- * 和 App 一样支持简体、繁体、英文、日文，按浏览器语言选择。其余界面暂时是简体中文。
+ * 网页版的多语言：和 App 一样支持简体、繁体、英文、日文，按浏览器语言选择。
  */
+import { table } from "./i18n-table";
+
 export type Lang = "zh" | "zh-Hant" | "en" | "ja";
 
 export const lang: Lang = (() => {
@@ -14,6 +15,7 @@ export const lang: Lang = (() => {
 type Dict = Record<string, string>;
 
 const zh: Dict = {
+  "acc.label": "{drive}（{email}）",
   "welcome.title": "Zyll 相册 · 网页版",
   "welcome.intro1": "在电脑上查看、上传和下载你手机备份到网盘的照片。照片存在",
   "welcome.introStrong": "你自己的",
@@ -57,6 +59,7 @@ const zh: Dict = {
 };
 
 const zhHant: Dict = {
+  "acc.label": "{drive}（{email}）",
   "welcome.title": "Zyll 相簿 · 網頁版",
   "welcome.intro1": "在電腦上檢視、上傳和下載你手機備份到雲端硬碟的照片。照片存在",
   "welcome.introStrong": "你自己的",
@@ -86,8 +89,8 @@ const zhHant: Dict = {
   "unlock.title": "解鎖加密照片",
   "unlock.desc": "輸入你在手機 Zyll 裡設定的端對端加密密碼。密碼只在這個瀏覽器裡用來解開金鑰，不會傳送到任何地方。",
   "unlock.password": "解鎖密碼",
-  "unlock.recovery": "復原金鑰",
-  "unlock.useRecovery": "忘記密碼？使用復原金鑰",
+  "unlock.recovery": "恢復金鑰",
+  "unlock.useRecovery": "忘記密碼？使用恢復金鑰",
   "unlock.usePassword": "改用密碼",
   "unlock.later": "稍後再說",
   "unlock.busy": "正在解鎖…",
@@ -100,6 +103,7 @@ const zhHant: Dict = {
 };
 
 const en: Dict = {
+  "acc.label": "{drive} ({email})",
   "welcome.title": "Zyll Photos · Web",
   "welcome.intro1": "View, upload and download the photos your phone backed up to cloud storage. Your photos stay in ",
   "welcome.introStrong": "your own",
@@ -143,6 +147,7 @@ const en: Dict = {
 };
 
 const ja: Dict = {
+  "acc.label": "{drive}（{email}）",
   "welcome.title": "Zyll フォト · Web 版",
   "welcome.intro1": "スマホがクラウドにバックアップした写真を、パソコンで表示・アップロード・ダウンロードできます。写真は",
   "welcome.introStrong": "あなた自身の",
@@ -172,8 +177,8 @@ const ja: Dict = {
   "unlock.title": "暗号化された写真のロックを解除",
   "unlock.desc": "スマホの Zyll で設定したエンドツーエンド暗号化のパスワードを入力してください。パスワードはこのブラウザ内で鍵を開くためだけに使われ、どこにも送信されません。",
   "unlock.password": "パスワード",
-  "unlock.recovery": "復元キー",
-  "unlock.useRecovery": "パスワードを忘れた場合は復元キーを使う",
+  "unlock.recovery": "回復キー",
+  "unlock.useRecovery": "パスワードを忘れた場合は回復キーを使う",
   "unlock.usePassword": "パスワードを使う",
   "unlock.later": "あとで",
   "unlock.busy": "解除しています…",
@@ -187,10 +192,16 @@ const ja: Dict = {
 
 const dicts: Record<Lang, Dict> = { zh, "zh-Hant": zhHant, en, ja };
 
+/**
+ * 取当前语言的文字。key 可以是上面的命名 key，也可以直接是简体中文原文（翻译在 i18n-table.ts）。
+ * {name} 形式的占位符用 vars 替换。
+ */
 export function t(key: string, vars: Record<string, string | number> = {}): string {
-  const s = dicts[lang][key] ?? zh[key] ?? key;
-  return s.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? ""));
+  const s = dicts[lang][key] ?? (lang === "zh" ? undefined : table[key]?.[lang]) ?? zh[key] ?? key;
+  return s.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));
 }
 
-/** 隐私政策和使用条款目前只有中文版，其他语言也链到中文版 */
+/** 隐私政策、使用条款对应语言的页面 */
+export const legalPage = (name: "privacy" | "terms") => (lang === "zh" ? `${name}.html` : `${name}.${lang}.html`);
+
 export const htmlLang = lang === "zh" ? "zh-CN" : lang === "zh-Hant" ? "zh-Hant" : lang;
