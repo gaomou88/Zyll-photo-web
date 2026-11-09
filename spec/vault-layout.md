@@ -4,17 +4,17 @@ Android 端现在用的布局。旧版 v1（用户可见的 `Zyll Vault/` 文件
 
 ```
 <应用数据区>                          # Google Drive：appDataFolder（用户在网盘里看不到，也删不到）
-                                      # OneDrive：/drive/special/approot
-└─ Zyll 相册/                          # CloudConfig.ROOT_FOLDER
-   ├─ index.json                      # 不加密时的备份目录（明文 JSON）
-   ├─ <相簿名>/<文件名>                # 不加密时的原图，按相簿分文件夹
-   ├─ .thumbs/<24 位随机十六进制>.jpg   # 不加密时的网盘缩略图
-   └─ vault/                          # CloudConfig.ENCRYPTED_FOLDER，开了端到端加密后用
-      ├─ keybundle.json               # 密钥包，见 keybundle.md
-      ├─ index.zylc                   # kind=3，加密的备份目录
-      ├─ ai-results.zylc              # kind=5，加密的 AI 整理结果
-      ├─ <32 位随机十六进制>.zylc       # kind=2，加密的原图
-      └─ t-<24 位随机十六进制>.zylc     # kind=0，加密的缩略图
+                                      # OneDrive：/drive/special/approot（用户在网盘里看到的是“应用/Zyll 相册”）
+                                      # 文件直接放在应用数据区根下，没有再套一层文件夹
+├─ index.json                      # 不加密时的备份目录（明文 JSON）
+├─ <相簿名>/<文件名>                # 不加密时的原图，按相簿分文件夹
+├─ .thumbs/<24 位随机十六进制>.jpg   # 不加密时的网盘缩略图
+└─ vault/                          # CloudConfig.ENCRYPTED_FOLDER，开了端到端加密后用
+   ├─ keybundle.json               # 密钥包，见 keybundle.md
+   ├─ index.zylc                   # kind=3，加密的备份目录
+   ├─ ai-results.zylc              # kind=5，加密的 AI 整理结果
+   ├─ <32 位随机十六进制>.zylc       # kind=2，加密的原图
+   └─ t-<24 位随机十六进制>.zylc     # kind=0，加密的缩略图
 ```
 
 - 加密文件的文件名是另取的随机十六进制串，不泄露原文件名、相簿或拍摄时间。它和 ZYLC 头里的 blobId 不是同一个值。
