@@ -27,8 +27,9 @@
     failed = false;
     if (hit || !p.acc.canOpen(p.item)) return;
     let cancelled = false;
+    const ctl = new AbortController();
     const stop = whenNear(el, () => {
-      thumbUrl(p).then((u) => {
+      thumbUrl(p, ctl.signal).then((u) => {
         if (cancelled) return;
         if (u) src = u;
         else failed = true;
@@ -36,6 +37,7 @@
     });
     return () => {
       cancelled = true;
+      ctl.abort();
       stop();
     };
   });

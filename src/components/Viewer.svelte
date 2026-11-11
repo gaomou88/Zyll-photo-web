@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { untrack } from "svelte";
+  import { fade } from "svelte/transition";
   import Icon from "./Icon.svelte";
   import { t } from "../lib/i18n";
   import { cachedThumb } from "../lib/thumbs";
@@ -15,7 +17,48 @@
     ondownload: (p: Photo) => void;
   } = $props();
 
+  // 按照片的 key 跟踪当前看的是哪张：后台刷新（上传、目录复查）会重建整个列表，
+  // 前面插进新照片时同一个下标就成了别的照片。列表变了按 key 重新找到它。
+  let curKey: string | null = null;
+  $effect.pre(() => {
+    const list = photos;
+    const k = curKey;
+    if (!k) return;
+    const i = list.findIndex((p) => p.key === k);
+    if (i >= 0 && i !== untrack(() => index)) index = i;
+  });
   const photo = $derived(photos[index]);
+  $effect.pre(() => {
+    curKey = photo?.key ?? null;
+  });
+  // 相邻两张的原图提前下载（只限不太大的照片），翻页时不用等
+  const PRELOAD_MAX = 30 * 1024 * 1024;
+  const preloaded = new Map<string, { blob: Promise<Blob>; ctl: AbortController }>();
+  const preloadable = (p: Photo | undefined): p is Photo =>
+    !!p && !p.item.m.startsWith("video/") && p.item.s > 0 && p.item.s < PRELOAD_MAX && p.acc.canOpen(p.item);
+  function preloadAround() {
+    const want = [photos[index - 1], photos[index + 1]].filter(preloadable);
+    const keep = new Set([photos[index]?.key, ...want.map((p) => p.key)]);
+    for (const [k, v] of preloaded) {
+      if (keep.has(k)) continue;
+      v.ctl.abort();
+      preloaded.delete(k);
+    }
+    for (const p of want) {
+      if (preloaded.has(p.key)) continue;
+      const ctl = new AbortController();
+      const blob = p.acc.original(p.item, ctl.signal);
+      blob.catch(() => preloaded.delete(p.key));
+      preloaded.set(p.key, { blob, ctl });
+    }
+  }
+  $effect(() => () => {
+    for (const v of preloaded.values()) v.ctl.abort();
+    preloaded.clear();
+  });
+
+  /** 只在换了一张照片时才重新加载（列表重建、同一张照片换了新对象不算）。 */
+  const photoKey = $derived(photo?.key ?? null);
   let url = $state<string | null>(null);
   let kind = $state<"image" | "video" | "none">("none");
   let loading = $state(false);
@@ -30,12 +73,14 @@
   let motionFrom = $state<string | null>(null);
 
   $effect(() => {
-    const p = photo;
-    if (!p) return;
+    if (!photoKey) return;
+    const p = untrack(() => photo)!;
     let cancelled = false;
     let made: string | null = null;
     let streamed: string | null = null;
     const ctl = new AbortController();
+    zoom = 1;
+    tx = ty = dragX = 0;
     motion = null;
     motionUrl = null;
     motionError = "";
@@ -91,12 +136,13 @@
           kind = "video";
           return;
         }
-        const raw = await p.acc.original(p.item, ctl.signal);
+        const raw = await (preloaded.get(p.key)?.blob ?? p.acc.original(p.item, ctl.signal));
         gotRaw(raw);
         const b = isHeicItem(p.item) ? await heicToJpeg(raw) : raw;
         if (cancelled) return;
         url = made = URL.createObjectURL(b);
         kind = "image";
+        untrack(preloadAround);
         // 没有标记的照片：原图到手后按内容找一次，找到了才显示按钮
         if (!motion) {
           const v = await fromRaw(raw);
@@ -153,26 +199,101 @@
   const next = () => index < photos.length - 1 && (index += 1);
 
   function onkey(e: KeyboardEvent) {
-    if (e.key === "Escape") onclose();
+    // 上面还开着别的弹窗（删除确认等）、或者在输入框里：按键不归大图
+    if (document.querySelector(".scrim") || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    const el = e.target as HTMLElement | null;
+    if (el?.closest("input, textarea, select")) return;
+    // 视频获得焦点时方向键留给视频快进快退
+    if (el?.tagName === "VIDEO" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+    if (e.key === "Escape") {
+      if (zoom > 1) return void (zoom = 1, (tx = ty = 0));
+      onclose();
+    }
     else if (e.key === "ArrowLeft") prev();
     else if (e.key === "ArrowRight") next();
     else if (e.key === "Delete" && photo) ondelete(photo);
     else if (e.key === "i") showInfo = !showInfo;
   }
 
-  // 触屏左右滑动
-  let sx = 0;
-  const ts = (e: TouchEvent) => (sx = e.touches[0]!.clientX);
-  const te = (e: TouchEvent) => {
-    const dx = e.changedTouches[0]!.clientX - sx;
-    if (Math.abs(dx) > 60) (dx > 0 ? prev : next)();
-  };
+  // ---------- 手势：滑动翻页（跟手）、双击或双指缩放、放大后拖动 ----------
+  let zoom = $state(1);
+  let tx = $state(0);
+  let ty = $state(0);
+  /** 没放大时手指拖动的横向距离（图片跟着走） */
+  let dragX = $state(0);
+  let settling = $state(false);
+  const pts = new Map<number, { x: number; y: number }>();
+  let start = { x: 0, y: 0, tx: 0, ty: 0, dist: 0, zoom: 1 };
+  let lastTap = 0;
+  let stageEl = $state<HTMLElement>();
+
+  const clampZoom = (z: number) => Math.min(5, Math.max(1, z));
+  function zoomAt(z: number, cx: number, cy: number) {
+    const r = stageEl!.getBoundingClientRect();
+    const ox = cx - r.left - r.width / 2;
+    const oy = cy - r.top - r.height / 2;
+    const nz = clampZoom(z);
+    // 让手指（鼠标）下面那一点保持不动
+    tx = ox - ((ox - tx) * nz) / zoom;
+    ty = oy - ((oy - ty) * nz) / zoom;
+    zoom = nz;
+    if (zoom === 1) tx = ty = 0;
+  }
+  const skip = (e: Event) => kind !== "image" || !!(e.target as HTMLElement).closest("button, video");
+
+  function down(e: PointerEvent) {
+    if (skip(e)) return;
+    stageEl!.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    settling = false;
+    const [a, b] = [...pts.values()];
+    start = { x: e.clientX, y: e.clientY, tx, ty, zoom, dist: a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0 };
+  }
+  function move(e: PointerEvent) {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const [a, b] = [...pts.values()];
+    if (a && b && start.dist) {
+      zoomAt((start.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / start.dist, (a.x + b.x) / 2, (a.y + b.y) / 2);
+    } else if (zoom > 1) {
+      tx = start.tx + e.clientX - start.x;
+      ty = start.ty + e.clientY - start.y;
+    } else if (e.pointerType !== "mouse") {
+      dragX = e.clientX - start.x;
+    }
+  }
+  function up(e: PointerEvent) {
+    if (!pts.delete(e.pointerId)) return;
+    if (pts.size) return;
+    const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+    if (zoom === 1 && dragX) {
+      settling = true;
+      const dx = dragX;
+      dragX = 0;
+      if (Math.abs(dx) > 60) (dx > 0 ? prev : next)();
+      return;
+    }
+    if (moved < 10) {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        lastTap = 0;
+        settling = true;
+        zoomAt(zoom > 1 ? 1 : 2.5, e.clientX, e.clientY);
+      } else lastTap = now;
+    }
+  }
+  function wheel(e: WheelEvent) {
+    if (skip(e)) return;
+    e.preventDefault();
+    settling = false;
+    zoomAt(zoom * Math.exp(-e.deltaY / 300), e.clientX, e.clientY);
+  }
 </script>
 
 <svelte:window onkeydown={onkey} />
 
 {#if photo}
-  <div class="viewer" role="dialog" aria-modal="true" aria-label={photo.item.n}>
+  <div class="viewer" role="dialog" aria-modal="true" aria-label={photo.item.n} out:fade|global={{ duration: 160 }}>
     <div class="bar">
       <button class="icon-btn" onclick={onclose} aria-label={t("关闭")}><Icon name="back" /></button>
       <span class="title">{photo.item.n}</span>
@@ -185,12 +306,15 @@
       <button class="icon-btn" onclick={() => ondownload(photo)} aria-label={t("下载")}><Icon name="download" /></button>
       <button class="icon-btn" onclick={() => ondelete(photo)} aria-label={t("删除")}><Icon name="trash" /></button>
     </div>
-    <div class="stage" ontouchstart={ts} ontouchend={te}>
+    <div class="stage" bind:this={stageEl} onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={up} onwheel={wheel}>
       {#if kind === "video" && url}
         <!-- svelte-ignore a11y_media_has_caption -->
         <video src={url} controls autoplay playsinline></video>
       {:else if url}
-        {#key photo.key}<img src={url} alt={photo.item.n} decoding="async" />{/key}
+        {#key photo.key}<img
+          src={url} alt={photo.item.n} decoding="async" draggable="false" class:settling
+          style:transform="translate({tx + dragX}px, {ty}px) scale({zoom})"
+        />{/key}
       {/if}
       {#if motionUrl}
         <!-- svelte-ignore a11y_media_has_caption -->
@@ -243,7 +367,9 @@
   .bar .icon-btn:hover { background: #ffffff22; }
   .bar .icon-btn.on { background: #ffffff33; }
   .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; opacity: 0.85; }
-  .stage { position: relative; display: grid; place-items: center; overflow: hidden; min-height: 0; }
+  .stage { position: relative; display: grid; place-items: center; overflow: hidden; min-height: 0; touch-action: none; }
+  .stage img { will-change: transform; cursor: zoom-in; user-select: none; -webkit-user-drag: none; }
+  .stage img.settling { transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1); }
   img, video { max-width: 100%; max-height: 100%; object-fit: contain; grid-area: 1 / 1; }
   .motion { z-index: 1; width: 100%; height: 100%; object-fit: contain; }
   .nav {

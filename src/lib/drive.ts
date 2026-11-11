@@ -63,6 +63,16 @@ export interface SharingDrive {
   deleteAny(id: string): Promise<void>;
 }
 
+/**
+ * 网盘文件 id 的格式（Google 的文件 id、OneDrive 的“驱动器id!编号”）。共享相册里的 id 来自别人，
+ * 拼进接口地址前一律按这个检查，防止带 /、?、引号的 id 改写请求（和 App 同一条规则）。
+ */
+export const ID_RE = /^(?!.*\.\.)[A-Za-z0-9_\-!.]{1,200}$/;
+export function checkId(id: string): string {
+  if (!ID_RE.test(id)) throw new Error(t("网盘文件 id 格式不对"));
+  return id;
+}
+
 export const isSharingDrive = (d: unknown): d is SharingDrive => !!d && typeof (d as SharingDrive).grant === "function";
 
 export class HttpError extends Error {
@@ -207,10 +217,12 @@ export class GoogleDrive implements Drive {
   }
 
   async download(id: string, range?: [number, number], signal?: AbortSignal): Promise<Uint8Array> {
+    checkId(id);
     return bytes(await request(this.account, `${G_API}/files/${id}?alt=media`, { headers: rangeHeader(range), signal }));
   }
 
   async mediaRequest(id: string): Promise<MediaRequest> {
+    checkId(id);
     return { url: `${G_API}/files/${id}?alt=media`, headers: { Authorization: `Bearer ${await accessToken(this.account)}` } };
   }
 
@@ -263,16 +275,19 @@ export class GoogleDrive implements Drive {
   }
 
   async delete(id: string): Promise<void> {
+    checkId(id);
     await request(this.account, `${G_API}/files/${id}`, { method: "DELETE" }, (s) => (s >= 200 && s < 300) || s === 404);
   }
 
   async exists(id: string): Promise<boolean> {
+    checkId(id);
     const r = await request(this.account, `${G_API}/files/${id}?fields=id,trashed`, {}, (s) => (s >= 200 && s < 300) || s === 404);
     if (r.status === 404) return false;
     return !(await r.json()).trashed;
   }
 
   async copy(id: string, path: string[]): Promise<string> {
+    checkId(id);
     const parent = (await this.folderId(path.slice(0, -1), true))!;
     const r = await request(this.account, `${G_API}/files/${id}/copy?fields=id`, {
       method: "POST",
@@ -295,10 +310,12 @@ export class GoogleDrive implements Drive {
   }
 
   async head(id: string, n: number): Promise<Uint8Array> {
+    checkId(id);
     return this.download(id, [0, n]);
   }
 
   async grant(id: string, email: string, write: boolean): Promise<void> {
+    checkId(id);
     await request(this.account, `${G_API}/files/${id}/permissions?sendNotificationEmail=false&fields=id`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -307,6 +324,7 @@ export class GoogleDrive implements Drive {
   }
 
   async revokeEmail(id: string, email: string): Promise<void> {
+    checkId(id);
     const o = await (await request(this.account, `${G_API}/files/${id}/permissions?fields=permissions(id,emailAddress,role)`)).json();
     for (const p of (o.permissions ?? []) as { id: string; emailAddress?: string; role?: string }[]) {
       if (p.role === "owner" || (p.emailAddress ?? "").toLowerCase() !== email.toLowerCase()) continue;
@@ -315,12 +333,14 @@ export class GoogleDrive implements Drive {
   }
 
   async findChild(folderId: string, name: string): Promise<string | null> {
+    checkId(folderId);
     const q = `name = '${gq(name)}' and '${folderId}' in parents and trashed = false`;
     const o = await (await request(this.account, `${G_API}/files?spaces=drive&orderBy=modifiedTime%20desc&fields=files(id)&q=${encodeURIComponent(q)}`)).json();
     return o.files?.[0]?.id ?? null;
   }
 
   async listChildren(folderId: string): Promise<[string, string, number][]> {
+    checkId(folderId);
     const q = `'${folderId}' in parents and trashed = false`;
     const out: [string, string, number][] = [];
     let page: string | undefined;
@@ -338,6 +358,7 @@ export class GoogleDrive implements Drive {
   }
 
   async uploadInto(folderId: string, name: string, data: Uint8Array, mime: string): Promise<string> {
+    checkId(folderId);
     const existing = await this.findChild(folderId, name);
     const meta = existing ? {} : { name, parents: [folderId] };
     const boundary = "zyll" + Math.random().toString(36).slice(2);
@@ -414,6 +435,7 @@ export class OneDrive implements Drive {
   }
 
   async download(id: string, range?: [number, number], signal?: AbortSignal): Promise<Uint8Array> {
+    checkId(id);
     const url = await this.downloadUrl(id);
     // 拿不到预签名地址时走 /content（302 跳到下载地址，跨源跳转时浏览器会去掉 Authorization）
     if (!url) return bytes(await request(this.account, `${MS_API}/me/drive/items/${id}/content`, { headers: rangeHeader(range), signal }));
@@ -431,6 +453,7 @@ export class OneDrive implements Drive {
   }
 
   async mediaRequest(id: string): Promise<MediaRequest> {
+    checkId(id);
     const url = await this.downloadUrl(id);
     if (url) return { url, headers: {} };
     return { url: `${MS_API}/me/drive/items/${id}/content`, headers: { Authorization: `Bearer ${await accessToken(this.account)}` } };
@@ -472,11 +495,13 @@ export class OneDrive implements Drive {
   }
 
   async delete(id: string): Promise<void> {
+    checkId(id);
     await request(this.account, `${MS_API}/me/drive/items/${id}`, { method: "DELETE" }, (s) => (s >= 200 && s < 300) || s === 404);
     this.downloadUrls.delete(id);
   }
 
   async exists(id: string): Promise<boolean> {
+    checkId(id);
     const r = await request(this.account, `${MS_API}/me/drive/items/${id}?$select=id`, {}, (s) => (s >= 200 && s < 300) || s === 404);
     return r.status !== 404;
   }
@@ -500,6 +525,7 @@ export class OneDrive implements Drive {
   }
 
   async copy(id: string, path: string[]): Promise<string> {
+    checkId(id);
     const parent = await this.ensureFolderRef(path.slice(0, -1));
     const r = await request(this.account, `${MS_API}/me/drive/items/${id}/copy?@microsoft.graph.conflictBehavior=rename`, {
       method: "POST",
@@ -523,6 +549,7 @@ export class OneDrive implements Drive {
 
   /** 别人网盘里的文件：id 形如“驱动器id!编号”，要按驱动器去取。 */
   private itemUrl(id: string) {
+    checkId(id);
     return id.includes("!") ? `${MS_API}/drives/${encodeURIComponent(id.split("!")[0]!)}/items/${encodeURIComponent(id)}` : `${MS_API}/me/drive/items/${id}`;
   }
 
@@ -531,11 +558,13 @@ export class OneDrive implements Drive {
   }
 
   async head(id: string, n: number): Promise<Uint8Array> {
+    checkId(id);
     if (!id.includes("!")) return this.download(id, [0, n]);
     return bytes(await request(this.account, `${this.itemUrl(id)}/content`, { headers: rangeHeader([0, n]) }));
   }
 
   async grant(id: string, email: string, write: boolean): Promise<void> {
+    checkId(id);
     await request(this.account, `${this.itemUrl(id)}/invite`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -544,6 +573,7 @@ export class OneDrive implements Drive {
   }
 
   async revokeEmail(id: string, email: string): Promise<void> {
+    checkId(id);
     const o = await (await request(this.account, `${this.itemUrl(id)}/permissions`)).json();
     for (const p of (o.value ?? []) as Record<string, any>[]) {
       if ((p.roles ?? []).includes("owner")) continue;
@@ -555,12 +585,14 @@ export class OneDrive implements Drive {
   }
 
   async findChild(folderId: string, name: string): Promise<string | null> {
+    checkId(folderId);
     const r = await request(this.account, `${this.itemUrl(folderId)}:/${encodeURIComponent(name)}?$select=id`, {}, (s) => (s >= 200 && s < 300) || s === 404);
     if (r.status === 404) return null;
     return (await r.json()).id;
   }
 
   async listChildren(folderId: string): Promise<[string, string, number][]> {
+    checkId(folderId);
     const out: [string, string, number][] = [];
     let url: string | undefined = `${this.itemUrl(folderId)}/children?$select=id,name,lastModifiedDateTime&$top=200`;
     while (url) {
@@ -572,11 +604,13 @@ export class OneDrive implements Drive {
   }
 
   async downloadAny(id: string): Promise<Uint8Array> {
+    checkId(id);
     if (!id.includes("!")) return this.download(id);
     return bytes(await request(this.account, `${this.itemUrl(id)}/content`));
   }
 
   async uploadInto(folderId: string, name: string, data: Uint8Array, mime: string): Promise<string> {
+    checkId(folderId);
     const r = await request(this.account, `${this.itemUrl(folderId)}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=replace`, {
       method: "PUT",
       headers: { "Content-Type": mime },
@@ -586,6 +620,7 @@ export class OneDrive implements Drive {
   }
 
   async deleteAny(id: string): Promise<void> {
+    checkId(id);
     await request(this.account, this.itemUrl(id), { method: "DELETE" }, (s) => (s >= 200 && s < 300) || s === 404);
     this.downloadUrls.delete(id);
   }
