@@ -6,8 +6,15 @@ import { t } from "./i18n";
  * 读写规则照搬安卓 CloudBackup.pullIndex / uploadIndex：
  * - 两份目录按 seq 从新到旧合并，同一个文件取新的那份，墓碑（del）里的去掉；
  * - 写回时 seq = max(网盘, 本机上次见过的) + 1，别的设备写的条目、mode、settings 原样保留；
- * - 只能写明文目录时不写加密条目（它们留在加密目录里）。
+ * - 只能写明文目录时不写加密条目（它们留在加密目录里）；
+ * - 手机搬存放位置时换了文件 id，目录里带一张对照表（mv）：读的时候先把旧 id 换成新的，写回时原样带上（过期的去掉）。
  */
+
+/** 对照表在目录里保留多久（和安卓一致）。 */
+const MOVES_KEEP_MS = 90 * 24 * 3600 * 1000;
+
+/** 搬存放位置时换过的 id：旧 id → { 新 id, 搬的时间 }。 */
+export type IdMoves = Map<string, { n: string; at: number }>;
 
 export interface IndexItem {
   /** 网盘文件 id */
@@ -46,6 +53,7 @@ export interface IndexDoc {
   trash: string[];
   mode: { enc: boolean; at: number } | null;
   settings: Record<string, unknown> | null;
+  mv: IdMoves;
 }
 
 export class IndexCorrupt extends Error {
@@ -81,6 +89,13 @@ export function parseIndex(text: string): IndexDoc {
       ...(i.mo === true ? { mo: true } : {}),
     } satisfies IndexItem;
   });
+  const mv: IdMoves = new Map();
+  for (const x of arr(d.mv, "mv")) {
+    if (!x || typeof x !== "object") continue;
+    const m = x as Record<string, unknown>;
+    const o = str(m.o), n = str(m.n);
+    if (o && n && o !== n) mv.set(o, { n, at: num(m.at) });
+  }
   const mode = d.mode && typeof d.mode === "object" ? { enc: (d.mode as { enc?: unknown }).enc === true, at: num((d.mode as { at?: unknown }).at) } : null;
   return {
     seq: num(d.seq),
@@ -90,6 +105,7 @@ export function parseIndex(text: string): IndexDoc {
     trash: arr(d.trash, "trash").filter((x): x is string => typeof x === "string"),
     mode,
     settings: d.settings && typeof d.settings === "object" && !Array.isArray(d.settings) ? (d.settings as Record<string, unknown>) : null,
+    mv,
   };
 }
 
@@ -103,25 +119,35 @@ export interface Merged {
   trash: Set<string>;
   mode: IndexDoc["mode"];
   settings: IndexDoc["settings"];
+  mv: IdMoves;
 }
 
-/** 合并读到的几份目录（加密那份 + 明文那份）。 */
+/** 合并读到的几份目录（加密那份 + 明文那份）。各份里的旧 id 先按对照表换成新的。 */
 export function mergeDocs(docs: IndexDoc[]): Merged {
   const sorted = [...docs].sort((a, b) => b.seq - a.seq);
+  const mv: IdMoves = new Map();
+  for (const d of sorted) for (const [o, v] of d.mv) if (!mv.has(o)) mv.set(o, v);
+  const moved = (id: string) => mv.get(id)?.n ?? id;
   const deleted = new Set<string>();
   const delList: string[] = [];
-  for (const d of sorted) for (const r of d.del) if (!deleted.has(r)) { deleted.add(r); delList.push(r); }
+  for (const d of sorted) for (const r0 of d.del) { const r = moved(r0); if (!deleted.has(r)) { deleted.add(r); delList.push(r); } }
   const seen = new Set<string>();
   const items: IndexItem[] = [];
-  for (const d of sorted) for (const o of d.items) if (o.r && !deleted.has(o.r) && !seen.has(o.r)) { seen.add(o.r); items.push(o); }
+  for (const d of sorted) {
+    for (const o0 of d.items) {
+      const o = mv.has(o0.r) || mv.has(o0.th) ? { ...o0, r: moved(o0.r), th: o0.th ? moved(o0.th) : "" } : o0;
+      if (o.r && !deleted.has(o.r) && !seen.has(o.r)) { seen.add(o.r); items.push(o); }
+    }
+  }
   const trash = new Set<string>();
-  for (const d of sorted) d.trash.forEach((t) => trash.add(t));
+  for (const d of sorted) d.trash.forEach((t) => trash.add(moved(t)));
   return {
     seq: sorted.reduce((m, d) => Math.max(m, d.seq), 0),
     hasSeq: sorted.some((d) => d.hasSeq),
     items, deleted, delList, trash,
     mode: sorted.find((d) => d.mode)?.mode ?? null,
     settings: sorted.find((d) => d.settings)?.settings ?? null,
+    mv,
   };
 }
 
@@ -170,6 +196,9 @@ export function serializeIndex(m: Merged, seq: number, encrypt: boolean): string
     trash: [...m.trash].slice(-TRASH_IN_INDEX),
   };
   if (m.mode) doc.mode = m.mode;
+  const cutoff = Date.now() - MOVES_KEEP_MS;
+  const mv = [...m.mv].filter(([, v]) => v.at >= cutoff).map(([o, v]) => ({ o, n: v.n, at: v.at }));
+  if (mv.length) doc.mv = mv;
   doc.settings = m.settings;
   return JSON.stringify(doc);
 }

@@ -67,4 +67,18 @@ describe("备份目录", () => {
     // 再读回来和原来一致
     expect(parseIndex(serializeIndex(m, 5, true)).items).toEqual(m.items);
   });
+  it("搬存放位置的对照表：旧 id 换成新的，同一张照片只出现一次；写回时带上，过期的去掉", () => {
+    const now = Date.now();
+    const old = parseIndex(JSON.stringify({ seq: 1, items: [item("a"), item("b")], del: ["c"], trash: ["ta"] }));
+    const cur = parseIndex(JSON.stringify({
+      seq: 2, items: [item("A", { th: "TA" })], del: [],
+      mv: [{ o: "a", n: "A", at: now }, { o: "ta", n: "TA", at: now }, { o: "c", n: "C", at: now }, { o: "x", n: "X", at: now - 100 * 24 * 3600 * 1000 }],
+    }));
+    const m = mergeDocs([old, cur]);
+    expect(m.items.map((i) => i.r).sort()).toEqual(["A", "b"]);
+    expect(m.deleted.has("C")).toBe(true);
+    expect([...m.trash]).toEqual(["TA"]);
+    const out = JSON.parse(serializeIndex(m, 3, true));
+    expect(out.mv.map((x: { o: string }) => x.o).sort()).toEqual(["a", "c", "ta"]);
+  });
 });
