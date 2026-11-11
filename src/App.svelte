@@ -56,6 +56,7 @@
   }
   let drawer = $state(false);
   let viewerIndex = $state<number | null>(null);
+  let wall = $state<ReturnType<typeof Timeline>>();
   let showUnlock = $state(false);
   let unlockDismissed = $state(false);
   let pendingFiles = $state<File[] | null>(null);
@@ -288,6 +289,7 @@
           <Albums photos={library.photos} onopen={(name) => (album = name)} />
         {:else}
           <Timeline
+            bind:this={wall}
             photos={list}
             {selected}
             onopen={(i) => (viewerIndex = i)}
@@ -311,7 +313,11 @@
   <Viewer
     photos={list}
     bind:index={viewerIndex}
-    onclose={() => (viewerIndex = null)}
+    onclose={() => {
+      const i = viewerIndex!;
+      viewerIndex = null;
+      wall?.reveal(i);
+    }}
     ondelete={(p) => (confirmDelete = [p])}
     ondownload={(p) => download([p])}
   />
