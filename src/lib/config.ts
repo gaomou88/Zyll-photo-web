@@ -17,6 +17,12 @@ export function redirectUri(): string {
   return u.toString();
 }
 
+/**
+ * 外链分享（spec/share-link.md）：不登录读取“知道链接的人可以查看”的 Google 文件用的 API key。
+ * 不是机密：在 Google Cloud 里限制了只能从网页版域名调用、只能用 Drive API。
+ */
+export const GOOGLE_API_KEY: string = import.meta.env.VITE_GOOGLE_API_KEY || "AIzaSyDs2uIdZdOPCyqMOwlfD2NdUhqyXGY_L_s";
+
 export const GOOGLE_SCOPES = [
   // 隐藏区（安卓默认的存储位置）
   "https://www.googleapis.com/auth/drive.appdata",

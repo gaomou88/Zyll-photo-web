@@ -10,7 +10,7 @@ export default defineConfig({
   build: {
     target: "es2022",
     rollupOptions: {
-      input: { main: resolve(__dirname, "index.html"), callback: resolve(__dirname, "auth-callback.html") },
+      input: { main: resolve(__dirname, "index.html"), callback: resolve(__dirname, "auth-callback.html"), link: resolve(__dirname, "s/index.html") },
     },
   },
 });

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex" />
+    <!--
+      外链分享页（spec/share-link.md）：不登录，只读公开的密文文件。
+      connect-src：Google Drive API（API key 下载公开文件）、OneDrive 匿名分享接口和它跳转到的下载地址。
+      wasm-unsafe-eval：Argon2id 和 HEIC 解码的 WASM。
+    -->
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://www.googleapis.com https://api.onedrive.com https://*.1drv.com https://*.sharepoint.com https://*.livefilestore.com https://*.microsoftpersonalcontent.com; object-src 'none'; base-uri 'self'; form-action 'none'" />
+    <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="../icon-32.png" type="image/png" sizes="32x32" />
+    <title>Zyll 相册 · 分享</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/link/main.ts"></script>
+  </body>
+</html>

@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 // Argon2id 64 MiB 需要约 1 秒，放在 Worker 里避免卡住界面。
 // 只把 MK 原始字节传回主线程，主线程立即导入为不可导出的 CryptoKey 并清零。
-import { keybundle } from "@zyll/crypto";
+import { keybundle, sharelink } from "@zyll/crypto";
 
 export type KdfRequest =
   | { op: "create"; password: string }
@@ -11,7 +11,9 @@ export type KdfRequest =
    * 换恢复密钥（newPassword 为空）或改密码：用 secret（密码，或 recovery 为 true 时的恢复密钥）解开 MK，
    * 重新包一次，返回新的密钥包（和新的恢复密钥）。MK 不离开 Worker。
    */
-  | { op: "rewrap"; json: string; secret: string; recovery: boolean; newPassword?: string; minRev: number };
+  | { op: "rewrap"; json: string; secret: string; recovery: boolean; newPassword?: string; minRev: number }
+  /** 外链：链接片段 + 密码算出清单钥匙（spec/share-link.md 第 2 节）。结果放在 masterKey 字段里传回。 */
+  | { op: "link"; secret: Uint8Array; password: string };
 
 export type KdfResponse =
   | { ok: true; json?: string; recoveryKey?: string; vaultId: string; masterKey?: Uint8Array }
@@ -44,6 +46,8 @@ self.onmessage = async (e: MessageEvent<KdfRequest>) => {
         masterKey: i.masterKey,
       };
       i.recoveryKey.fill(0);
+    } else if (req.op === "link") {
+      res = { ok: true, vaultId: "", masterKey: await sharelink.linkKeyBytes(req.secret, req.password) };
     } else if (req.op === "unlockPassword") {
       res = { ok: true, ...(await keybundle.unwrapWithPassword(req.json, req.password)) };
     } else if (req.op === "unlockRecovery") {
