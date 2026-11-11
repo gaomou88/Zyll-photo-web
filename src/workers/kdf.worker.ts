@@ -6,10 +6,15 @@ import { keybundle } from "@zyll/crypto";
 export type KdfRequest =
   | { op: "create"; password: string }
   | { op: "unlockPassword"; json: string; password: string }
-  | { op: "unlockRecovery"; json: string; recoveryKey: string };
+  | { op: "unlockRecovery"; json: string; recoveryKey: string }
+  /**
+   * 换恢复密钥（newPassword 为空）或改密码：用 secret（密码，或 recovery 为 true 时的恢复密钥）解开 MK，
+   * 重新包一次，返回新的密钥包（和新的恢复密钥）。MK 不离开 Worker。
+   */
+  | { op: "rewrap"; json: string; secret: string; recovery: boolean; newPassword?: string; minRev: number };
 
 export type KdfResponse =
-  | { ok: true; json?: string; recoveryKey?: string; vaultId: string; masterKey: Uint8Array }
+  | { ok: true; json?: string; recoveryKey?: string; vaultId: string; masterKey?: Uint8Array }
   | { ok: false; error: string };
 
 self.onmessage = async (e: MessageEvent<KdfRequest>) => {
@@ -26,7 +31,11 @@ self.onmessage = async (e: MessageEvent<KdfRequest>) => {
         rcSalt: crypto.getRandomValues(new Uint8Array(16)),
         rcNonce: crypto.getRandomValues(new Uint8Array(12)),
       };
-      const file = await keybundle.createWith(i, req.password, keybundle.DEFAULT_ARGON2);
+      const created = await keybundle.createWith(i, req.password, keybundle.DEFAULT_ARGON2);
+      // 新建时就带上 rev 和 mac（和 App 一样），以后各设备据此判断哪份更新
+      const wrapKey = await keybundle.deriveWrapKeyBytes(i.masterKey);
+      const file = await keybundle.sign({ ...created, rev: Date.now() }, wrapKey);
+      wrapKey.fill(0);
       res = {
         ok: true,
         json: JSON.stringify(file, null, 2),
@@ -37,10 +46,22 @@ self.onmessage = async (e: MessageEvent<KdfRequest>) => {
       i.recoveryKey.fill(0);
     } else if (req.op === "unlockPassword") {
       res = { ok: true, ...(await keybundle.unwrapWithPassword(req.json, req.password)) };
-    } else {
+    } else if (req.op === "unlockRecovery") {
       res = { ok: true, ...(await keybundle.unwrapWithRecoveryKey(req.json, req.recoveryKey)) };
+    } else {
+      const { vaultId, masterKey } = req.recovery
+        ? await keybundle.unwrapWithRecoveryKey(req.json, req.secret)
+        : await keybundle.unwrapWithPassword(req.json, req.secret);
+      try {
+        const rk = req.newPassword === undefined ? crypto.getRandomValues(new Uint8Array(32)) : undefined;
+        const json = await keybundle.rewrap(req.json, masterKey, { newPassword: req.newPassword, newRecoveryKey: rk, minRev: req.minRev });
+        res = { ok: true, json, vaultId, recoveryKey: rk ? keybundle.formatRecoveryKey(rk) : undefined };
+        rk?.fill(0);
+      } finally {
+        masterKey.fill(0);
+      }
     }
-    self.postMessage(res, res.ok ? [res.masterKey.buffer as ArrayBuffer] : []);
+    self.postMessage(res, res.ok && res.masterKey ? [res.masterKey.buffer as ArrayBuffer] : []);
   } catch (err) {
     self.postMessage({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies KdfResponse);
   }

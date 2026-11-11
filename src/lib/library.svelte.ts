@@ -269,6 +269,33 @@ export class Account {
     }
   }
 
+  /**
+   * 换上同一套密钥的新版密钥包（改了密码或换了恢复密钥）。写之前再读一次网盘上的：不是同一套、
+   * 或者已经有更新的（别的设备刚改过）就不写，抛出错误。手机正在搬存储位置时也不写。
+   */
+  async writeBundle(json: string) {
+    await this.lock(async () => {
+      if (this.migrating) throw new Error(t("手机正在搬迁存储位置，搬完前不能在这里上传或删除照片。"));
+      const next = keybundle.parse(json);
+      const id = await this.drive.findFile(KEYBUNDLE_PATH);
+      if (id) {
+        const cur = keybundle.parse(text.decode(await this.drive.download(id)));
+        if (cur.vaultId !== next.vaultId) throw new Error(t("这个网盘里是另一套密钥，没有改它。"));
+        if (keybundle.revOf(cur) >= keybundle.revOf(next)) throw new Error(t("另一台设备刚改过密码或恢复密钥，请刷新页面后再试。"));
+      }
+      await this.drive.upload(KEYBUNDLE_PATH, bytesSource(utf8.encode(json), "application/json"), { replace: true });
+      this.bundleJson = json;
+    });
+  }
+
+  /** 重新读一次网盘上的密钥包（别的设备可能刚改过密码或恢复密钥）。 */
+  async reloadBundle() {
+    await this.lock(async () => {
+      const id = await this.drive.findFile(KEYBUNDLE_PATH);
+      if (id) this.bundleJson = text.decode(await this.drive.download(id));
+    });
+  }
+
   /** 操作中途登录过期：切到“需要重新连接”状态，界面会显示提示条。 */
   noteError(e: unknown) {
     if (e instanceof NeedsSignIn) this.state = "signin";
@@ -854,7 +881,7 @@ class Library {
    */
   async createVault(password: string): Promise<NewVault> {
     const r = await runKdf({ op: "create", password });
-    return { json: r.json!, recoveryKey: r.recoveryKey!, vaultId: r.vaultId, masterKey: r.masterKey };
+    return { json: r.json!, recoveryKey: r.recoveryKey!, vaultId: r.vaultId, masterKey: r.masterKey! };
   }
 
   /** 新账号的首次设置（见 Account.setup）。 */
@@ -913,28 +940,73 @@ class Library {
 
   /** 用密码或恢复密钥解锁网盘里的密钥包（几个账号的密钥包一起试）。 */
   async unlock(secret: string, recovery: boolean) {
-    const bundles = new Map<string, string>();
+    // 同一套密钥在几个账号里的密钥包可能新旧不一（别的设备刚改过密码，还没传到每个账号）：按 rev 从新到旧都试一遍
+    const bundles = new Map<string, string[]>();
     for (const a of this.accounts) {
       const id = a.bundleVaultId;
-      if (id && a.bundleJson && !keyring.has(id)) bundles.set(id, a.bundleJson);
+      if (!id || !a.bundleJson || keyring.has(id)) continue;
+      const list = bundles.get(id) ?? [];
+      if (!list.includes(a.bundleJson)) list.push(a.bundleJson);
+      bundles.set(id, list);
     }
     if (!bundles.size) throw new Error(t("网盘里没有找到密钥包"));
     let ok = 0;
     let lastErr: Error | null = null;
-    for (const [, json] of bundles) {
-      try {
-        const r = await runKdf(recovery ? { op: "unlockRecovery", json, recoveryKey: secret } : { op: "unlockPassword", json, password: secret });
-        const v = await keybundle.vaultFromMasterKey(r.vaultId, r.masterKey);
-        keyring.set(v.vaultId, v.wrapKey);
-        ok++;
-      } catch (e) {
-        lastErr = e as Error;
+    for (const [, list] of bundles) {
+      for (const json of newestFirst(list)) {
+        try {
+          const r = await runKdf(recovery ? { op: "unlockRecovery", json, recoveryKey: secret } : { op: "unlockPassword", json, password: secret });
+          const v = await keybundle.vaultFromMasterKey(r.vaultId, r.masterKey!);
+          keyring.set(v.vaultId, v.wrapKey);
+          ok++;
+          break;
+        } catch (e) {
+          lastErr = e as Error;
+        }
       }
     }
     if (!ok) throw lastErr ?? new Error(t("密码或恢复密钥不正确"));
     this.unlocked = true;
     await Promise.all(this.accounts.filter((a) => a.state !== "ready" || a.items.some((i) => i.e)).map((a) => a.load()));
     await Promise.all(this.accounts.map((a) => a.finishSetup()));
+  }
+
+  /**
+   * 换恢复密钥（[newPassword] 不传）或改密码：用 [secret]（现在的密码，或 [recovery] 为 true 时的恢复密钥）解开主密钥，
+   * 重新包一次，写回放着这套密钥包的每个账号。照片不用重新上传。
+   * 返回新的恢复密钥（改密码时为 null）和没写成的账号（手机下次核对密钥包时会补上）。
+   */
+  async rewrap(secret: string, recovery: boolean, newPassword?: string): Promise<{ recoveryKey: string | null; failed: string[] }> {
+    const unlocked = this.accounts.filter((a) => a.bundleJson && a.wrapKey());
+    const ids = new Set(unlocked.map((a) => a.bundleVaultId));
+    if (!ids.size) throw new Locked();
+    if (ids.size > 1) throw new Error(t("你的网盘账号里有不止一套密钥，请先在手机 Zyll 上处理好，再来改密码或恢复密钥。"));
+    const vaultId = [...ids][0]!;
+    const holders = this.accounts.filter((a) => a.bundleVaultId === vaultId);
+    // 先读一次各账号网盘上最新的密钥包，别的设备可能刚改过
+    await Promise.all(holders.filter((a) => a.state === "ready").map((a) => a.reloadBundle().catch(() => {})));
+    const same = holders.map((a) => a.bundleJson).filter((j): j is string => !!j && bundleVault(j) === vaultId);
+    const sorted = newestFirst(same);
+    if (!sorted.length) throw new Locked();
+    const minRev = Math.max(...sorted.map((j) => keybundle.revOf(keybundle.parse(j))));
+    const r = await runKdf({ op: "rewrap", json: sorted[0]!, secret, recovery, newPassword, minRev });
+    if (r.vaultId !== vaultId || !r.json) throw new Error(t("密码或恢复密钥不正确"));
+    const failed: string[] = [];
+    for (const a of holders) {
+      if (a.state !== "ready") {
+        failed.push(a.label);
+        continue;
+      }
+      try {
+        await a.writeBundle(r.json);
+      } catch (e) {
+        a.noteError(e);
+        failed.push(`${a.label}（${(e as Error).message}）`);
+      }
+    }
+    // 一个都没写成：新的密码或恢复密钥没有生效，不要让用户以为换好了
+    if (failed.length === holders.length) throw new Error(t("没能写进任何一个网盘账号，密码和恢复密钥都没有改：{why}", { why: failed.join("；") }));
+    return { recoveryKey: r.recoveryKey ?? null, failed };
   }
 
   /** 锁上：丢掉内存里的密钥，加密的内容重新需要密码。 */
@@ -946,4 +1018,24 @@ class Library {
 }
 
 export const library = new Library();
+
+function bundleVault(json: string): string | null {
+  try {
+    return keybundle.parse(json).vaultId;
+  } catch {
+    return null;
+  }
+}
+
+/** 同一套密钥的几份密钥包按 rev 从新到旧排。 */
+function newestFirst(list: string[]): string[] {
+  const rev = (j: string) => {
+    try {
+      return keybundle.revOf(keybundle.parse(j));
+    } catch {
+      return -1;
+    }
+  };
+  return [...new Set(list)].sort((a, b) => rev(b) - rev(a));
+}
 export const isHeicItem = (i: IndexItem) => isHeic(i.m, i.n);

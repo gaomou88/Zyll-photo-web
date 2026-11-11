@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import KeysDialog from "./KeysDialog.svelte";
   import { t } from "../lib/i18n";
   import { configured, cancelSignIn, type DriveKind } from "../lib/auth";
   import { library, type Account } from "../lib/library.svelte";
@@ -7,6 +8,7 @@
 
   let { autoLock = $bindable(), onlock, onunlock }: { autoLock: number; onlock: () => void; onunlock: () => void } = $props();
   let busy = $state("");
+  let keys = $state<"recovery" | "password" | null>(null);
   let error = $state("");
 
   async function connect(kind: DriveKind) {
@@ -107,6 +109,12 @@
         </select>
       </label>
       <div><button class="btn" onclick={onlock}><Icon name="lock" size={18} /> {t("现在锁上")}</button></div>
+      <h3>{t("密码和恢复密钥")}</h3>
+      <p class="muted">{t("密码和恢复密钥都能解开你的加密备份。忘了其中一样，可以用另一样重新设置。照片不用重新上传，也不用重新加密。")}</p>
+      <div class="row">
+        <button class="btn" onclick={() => (keys = "recovery")}>{t("换新的恢复密钥")}</button>
+        <button class="btn" onclick={() => (keys = "password")}>{t("修改密码")}</button>
+      </div>
     {:else}
       <p class="muted">{t("加密的照片需要输入密码才能查看和上传。")}</p>
       <div><button class="btn primary" onclick={onunlock}>{t("解锁")}</button></div>
@@ -126,9 +134,12 @@
       </section>
 </div>
 
+{#if keys}<KeysDialog mode={keys} onclose={() => (keys = null)} />{/if}
+
 <style>
   .settings { max-width: 720px; display: flex; flex-direction: column; gap: 28px; }
   h2 { font-size: 17px; font-weight: 600; margin: 0 0 12px; }
+  h3 { font-size: 15px; font-weight: 600; margin: 8px 0 0; }
   section { display: flex; flex-direction: column; gap: 12px; }
   section p { margin: 0; }
   .acc { display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; }
