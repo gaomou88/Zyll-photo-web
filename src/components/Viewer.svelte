@@ -317,6 +317,7 @@
     } else if (mode === "none" && e.pointerType !== "mouse" && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
       mode = "swipe";
       capture(e.pointerId);
+      motionUrl = null; // 动态照片正在播：开始翻页就停掉
     }
     if (mode === "swipe") {
       // 到头了：拖动距离减半，松手弹回
