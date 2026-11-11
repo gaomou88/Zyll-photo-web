@@ -16,6 +16,7 @@ class Cancelled extends Error {}
 
 async function slot<T>(job: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (active >= 6) {
+    // 前一个任务做完时直接把名额交过来（active 不变），中间不会被别的任务插队
     await new Promise<void>((resolve, reject) => {
       const go = () => {
         signal?.removeEventListener("abort", drop);
@@ -30,13 +31,13 @@ async function slot<T>(job: () => Promise<T>, signal?: AbortSignal): Promise<T> 
       signal?.addEventListener("abort", drop, { once: true });
       waiting.push(go);
     });
-  }
-  active++;
+  } else active++;
   try {
     return await job();
   } finally {
-    active--;
-    waiting.pop()?.();
+    const next = waiting.pop();
+    if (next) next();
+    else active--;
   }
 }
 

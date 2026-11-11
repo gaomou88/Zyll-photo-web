@@ -110,7 +110,7 @@ export interface Invite {
 export function parseInvite(text: string): Invite | null {
   const o = payload(text, "join");
   // 文件夹 id 来自别人：格式不对、或者没有主人安全码（没法核对主人）的链接都不收
-  if (o?.format !== "zyll-shared-invite" || !o.album || !ID_RE.test(String(o.folder ?? "")) || !String(o.code ?? "").trim()) return null;
+  if (o?.format !== "zyll-shared-invite" || !ID_RE.test(String(o.album ?? "")) || !ID_RE.test(String(o.folder ?? "")) || !String(o.code ?? "").trim()) return null;
   return {
     provider: o.provider === "google" ? "google" : "onedrive",
     folder: String(o.folder), album: String(o.album), name: String(o.name ?? ""), owner: String(o.owner ?? ""), code: String(o.code ?? ""),
@@ -435,7 +435,7 @@ class SharedAlbums {
       }
       if (o) {
         for (const a of (o.albums ?? []) as Record<string, any>[]) {
-          if (!ID_RE.test(String(a.f))) continue;
+          if (!ID_RE.test(String(a.f)) || !ID_RE.test(String(a.a))) continue;
           remote.push({
             albumId: String(a.a), acc: acc.key, folderId: String(a.f), name: String(a.n ?? ""), myRole: isRole(a.role) ? a.role : null,
             ownerEmail: String(a.oe ?? ""), ownerCode: String(a.oc ?? ""), count: Number(a.c) || 0, addedAt: Number(a.t) || 0, seq: Number(a.seq) || 0,
@@ -520,7 +520,11 @@ class SharedAlbums {
     if (m.albumId !== ref.albumId || m.seq < seen) throw new Tampered();
     if (ref.ownerCode && m.owner.code !== ref.ownerCode) throw new Tampered();
     // 旧记录里没有主人安全码：第一次读到时记下并固定，之后主人变了就拒绝
-    if (!ref.ownerCode && this.albums.some((a) => a.albumId === ref.albumId)) this.saveRef({ ...ref, ownerCode: m.owner.code });
+    if (!ref.ownerCode) {
+      // 用列表里现在那条记录，免得把名字、数量、角色改回旧值
+      const cur = this.albums.find((a) => a.albumId === ref.albumId);
+      if (cur && !cur.ownerCode) this.saveRef({ ...cur, ownerCode: m.owner.code });
+    }
     lsSet(seqKey(ref.albumId), String(m.seq));
     return m;
   }
