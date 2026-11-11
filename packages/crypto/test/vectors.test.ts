@@ -114,6 +114,12 @@ describe("keybundle rev / mac", () => {
     expect(kb.revOf(kb.parse(json2))).toBe(7);
     expect((await kb.unwrapWithPassword(json2, "new pass 456")).masterKey).toEqual(mk);
     await expect(kb.unwrapWithPassword(json2, "old pass 123")).rejects.toThrow();
+    // 解锁时派生的验证密钥（不碰 K_wrap 原始字节）和 verify 结论一致
+    const v = await kb.vaultFromMasterKey("v1", new Uint8Array(mk));
+    expect(await kb.verifyWithKey(kb.parse(json2), v.macKey)).toBe(true);
+    expect(await kb.verifyWithKey({ ...kb.parse(json2), rev: 99 }, v.macKey)).toBe(false);
+    const other = await kb.vaultFromMasterKey("v1", randomMk());
+    expect(await kb.verifyWithKey(kb.parse(json2), other.macKey)).toBe(false);
   }, 60_000);
 });
 

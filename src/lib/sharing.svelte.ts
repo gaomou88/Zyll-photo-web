@@ -385,6 +385,7 @@ class SharedAlbums {
     // 上传前再查一次（手机可能刚好也在生成），上传后读回来：以网盘上的那份为准，两边不会各用一套
     const raced = await read();
     if (raced) return raced;
+    await acc.checkWiped();
     await acc.drive.upload(IDENTITY_PATH, { size: ct.length, mime: "application/octet-stream", read: async (a, b) => ct.slice(a, b) }, { replace: true });
     // 网盘的列表有时稍晚才看得到刚写的文件：隔一会儿再读回来（和 App 一样等 2.5 秒）
     await new Promise((r) => setTimeout(r, 2500));
@@ -413,6 +414,7 @@ class SharedAlbums {
   }
 
   private async doSyncList(acc: Account) {
+    await acc.checkWiped();
     const key = this.key(acc);
     const id = await acc.drive.findFile(LIST_PATH);
     const remote: (AlbumRef & { seq: number })[] = [];
@@ -459,6 +461,7 @@ class SharedAlbums {
       removed: allRemoved,
     }));
     const ct = await zylc.encrypt(plain, BlobKind.Other, key);
+    await acc.checkWiped();
     await acc.drive.upload(LIST_PATH, { size: ct.length, mime: "application/octet-stream", read: async (a, b) => ct.slice(a, b) }, { replace: true });
     lsSet(DIRTY, JSON.stringify(dirtyList().filter((k) => k !== acc.key)));
   }
@@ -566,6 +569,7 @@ class SharedAlbums {
       if (!now || now.seq !== m.seq) throw new Error(t("相册刚被别人改过，请再试一次"));
     }
     const ct = await zylc.encrypt(indexJson(index), BlobKind.IndexSnapshot, await sharing.albumWrapKey(ak, m.albumId));
+    await this.account(ref).checkWiped();
     await drive.uploadInto(ref.folderId, file, ct, "application/octet-stream");
     const next: Manifest = { ...m, seq: m.seq + 1, indexSha: toHex(await sha256(ct)), indexSeq: index.seq, indexFile: file };
     await drive.uploadInto(ref.folderId, MANIFEST, enc.encode(await sealManifest(next, me)), "application/json");
