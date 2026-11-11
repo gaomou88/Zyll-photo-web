@@ -266,18 +266,30 @@
     if (zoom === 1) tx = ty = 0;
     clampPan();
   }
-  const skip = (e: Event) => kind !== "image" || !!(e.target as HTMLElement).closest("button, video");
+  /** 按钮不归手势；视频底部那条控制栏（进度条）也不归，免得拖进度条变成翻页。 */
+  function skip(e: PointerEvent | WheelEvent) {
+    const el = e.target as HTMLElement;
+    if (el.closest("button")) return true;
+    const v = el.closest("video");
+    return !!v && v.getBoundingClientRect().bottom - e.clientY < 56;
+  }
+  /** 缩放、拖动、双击只对图片；视频页和没加载出来的页面只能滑动翻页。 */
+  const zoomable = () => kind === "image";
+  function capture(id: number) {
+    try {
+      stageEl!.setPointerCapture(id);
+    } catch {}
+  }
   const restart = (x: number, y: number) => (start = { x, y, tx, ty, zoom, dist: 0 });
 
   function down(e: PointerEvent) {
     if (skip(e)) return;
-    try {
-      stageEl!.setPointerCapture(e.pointerId);
-    } catch {}
+    // 视频上先不抓指针，点按照样能暂停、调出控制条；确定是滑动时再抓
+    if (zoomable()) capture(e.pointerId);
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     settling = false;
     const [a, b] = [...pts.values()];
-    if (a && b) {
+    if (a && b && zoomable()) {
       // 第二根手指落下：改成缩放，之前那点横向拖动作废
       mode = "pinch";
       dragX = 0;
@@ -292,7 +304,7 @@
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const [a, b] = [...pts.values()];
     if (a && b) {
-      if (start.dist) zoomAt((start.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / start.dist, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      if (start.dist && zoomable()) zoomAt((start.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / start.dist, (a.x + b.x) / 2, (a.y + b.y) / 2);
       return;
     }
     const dx = e.clientX - start.x;
@@ -304,6 +316,7 @@
       clampPan();
     } else if (mode === "none" && e.pointerType !== "mouse" && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
       mode = "swipe";
+      capture(e.pointerId);
     }
     if (mode === "swipe") {
       // 到头了：拖动距离减半，松手弹回
@@ -348,7 +361,7 @@
     }
     const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
     mode = "none";
-    if (moved < 10 && e.type === "pointerup") {
+    if (moved < 10 && e.type === "pointerup" && zoomable()) {
       const now = Date.now();
       if (now - lastTap < 300) {
         lastTap = 0;
@@ -358,7 +371,7 @@
     }
   }
   function wheel(e: WheelEvent) {
-    if (skip(e)) return;
+    if (skip(e) || !zoomable()) return;
     e.preventDefault();
     settling = false;
     zoomAt(zoom * Math.exp(-e.deltaY / 300), e.clientX, e.clientY);
@@ -390,7 +403,7 @@
     <div class="stage" bind:this={stageEl} onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={up} onwheel={wheel}>
       {#if kind === "video" && url}
         <!-- svelte-ignore a11y_media_has_caption -->
-        <video src={url} controls autoplay playsinline></video>
+        <video src={url} controls autoplay playsinline class:settling style:transform={dragX ? `translateX(${dragX}px)` : null}></video>
       {:else if url}
         {#key photo.key}<img
           bind:this={imgEl} src={url} alt={photo.item.n} decoding="async" draggable="false" class:settling class:zoomed={zoom > 1} class:panning
@@ -452,7 +465,7 @@
   .stage img { will-change: transform; user-select: none; -webkit-user-drag: none; }
   .stage img.zoomed { cursor: grab; }
   .stage img.panning { cursor: grabbing; }
-  .stage img.settling { transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1); }
+  .stage video.settling, .stage img.settling { transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1); }
   img, video { max-width: 100%; max-height: 100%; object-fit: contain; grid-area: 1 / 1; }
   .motion { z-index: 1; width: 100%; height: 100%; object-fit: contain; }
   .nav {
