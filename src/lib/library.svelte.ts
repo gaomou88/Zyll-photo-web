@@ -767,6 +767,22 @@ class Library {
       });
       (window as unknown as { demoDrive: unknown; demoDrives: unknown }).demoDrive = drives[0];
       (window as unknown as { demoDrives: unknown }).demoDrives = drives;
+      // &drip：每 4 秒在最前面插一张新照片（测后台刷新时照片墙和大图不乱跳）
+      if (new URLSearchParams(location.search).has("drip")) {
+        const acc = this.accounts[0]!;
+        const d = drives[0]!;
+        let n = 0;
+        setInterval(() => {
+          const src = acc.items[n % Math.min(24, acc.items.length)];
+          if (acc.state !== "ready" || !src) return;
+          const r = `${d.account.accountId}-drip${n}`;
+          const th = `${d.account.accountId}-dript${n}`;
+          d.files.set(r, { ...d.files.get(src.r)!, id: r, path: `vault/drip${n}.zylc` });
+          if (src.th) d.files.set(th, { ...d.files.get(src.th)!, id: th, path: `vault/dript${n}.zylc` });
+          acc.items = [{ ...src, r, th: src.th ? th : src.th, n: `NEW_${n}.jpg`, h: src.h.slice(0, 56) + (0xf0000000 + n).toString(16), t: Date.now() }, ...acc.items];
+          n++;
+        }, 4000);
+      }
     }
     return Promise.all(this.accounts.map((a) => a.load()));
   }

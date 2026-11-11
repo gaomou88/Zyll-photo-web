@@ -80,7 +80,19 @@
     let streamed: string | null = null;
     const ctl = new AbortController();
     zoom = 1;
-    tx = ty = dragX = 0;
+    tx = ty = 0;
+    // 滑动翻页：新照片先放在屏幕外那一侧，下一帧滑到中间
+    const from = slideIn;
+    dragX = from;
+    slideIn = 0;
+    if (from) {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          settling = true;
+          dragX = 0;
+        }),
+      );
+    }
     motion = null;
     motionUrl = null;
     motionError = "";
@@ -222,12 +234,26 @@
   /** 没放大时手指拖动的横向距离（图片跟着走） */
   let dragX = $state(0);
   let settling = $state(false);
+  let panning = $state(false);
   const pts = new Map<number, { x: number; y: number }>();
   let start = { x: 0, y: 0, tx: 0, ty: 0, dist: 0, zoom: 1 };
+  /** 这次按下之后在做什么：还没定（可能是点按）、跟手翻页、拖动、双指缩放（之后剩一根手指也不再算点按或翻页） */
+  let mode: "none" | "swipe" | "pan" | "pinch" = "none";
   let lastTap = 0;
+  /** 翻页动画：新照片从这一侧滑进来 */
+  let slideIn = 0;
   let stageEl = $state<HTMLElement>();
+  let imgEl = $state<HTMLImageElement>();
 
   const clampZoom = (z: number) => Math.min(5, Math.max(1, z));
+  /** 放大后图片边缘不能离开舞台边缘。 */
+  function clampPan() {
+    if (!stageEl || !imgEl) return;
+    const mx = Math.max(0, (imgEl.offsetWidth * zoom - stageEl.clientWidth) / 2);
+    const my = Math.max(0, (imgEl.offsetHeight * zoom - stageEl.clientHeight) / 2);
+    tx = Math.min(mx, Math.max(-mx, tx));
+    ty = Math.min(my, Math.max(-my, ty));
+  }
   function zoomAt(z: number, cx: number, cy: number) {
     const r = stageEl!.getBoundingClientRect();
     const ox = cx - r.left - r.width / 2;
@@ -238,42 +264,91 @@
     ty = oy - ((oy - ty) * nz) / zoom;
     zoom = nz;
     if (zoom === 1) tx = ty = 0;
+    clampPan();
   }
   const skip = (e: Event) => kind !== "image" || !!(e.target as HTMLElement).closest("button, video");
+  const restart = (x: number, y: number) => (start = { x, y, tx, ty, zoom, dist: 0 });
 
   function down(e: PointerEvent) {
     if (skip(e)) return;
-    stageEl!.setPointerCapture(e.pointerId);
+    try {
+      stageEl!.setPointerCapture(e.pointerId);
+    } catch {}
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     settling = false;
     const [a, b] = [...pts.values()];
-    start = { x: e.clientX, y: e.clientY, tx, ty, zoom, dist: a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0 };
+    if (a && b) {
+      // 第二根手指落下：改成缩放，之前那点横向拖动作废
+      mode = "pinch";
+      dragX = 0;
+      start = { x: e.clientX, y: e.clientY, tx, ty, zoom, dist: Math.hypot(a.x - b.x, a.y - b.y) };
+    } else if (pts.size === 1) {
+      mode = zoom > 1 ? "pan" : "none";
+      restart(e.clientX, e.clientY);
+    }
   }
   function move(e: PointerEvent) {
     if (!pts.has(e.pointerId)) return;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const [a, b] = [...pts.values()];
-    if (a && b && start.dist) {
-      zoomAt((start.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / start.dist, (a.x + b.x) / 2, (a.y + b.y) / 2);
-    } else if (zoom > 1) {
-      tx = start.tx + e.clientX - start.x;
-      ty = start.ty + e.clientY - start.y;
-    } else if (e.pointerType !== "mouse") {
-      dragX = e.clientX - start.x;
+    if (a && b) {
+      if (start.dist) zoomAt((start.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / start.dist, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      return;
+    }
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (zoom > 1) {
+      panning = true;
+      tx = start.tx + dx;
+      ty = start.ty + dy;
+      clampPan();
+    } else if (mode === "none" && e.pointerType !== "mouse" && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
+      mode = "swipe";
+    }
+    if (mode === "swipe") {
+      // 到头了：拖动距离减半，松手弹回
+      const stuck = (dx > 0 && index === 0) || (dx < 0 && index >= photos.length - 1);
+      dragX = stuck ? dx / 2 : dx;
     }
   }
   function up(e: PointerEvent) {
     if (!pts.delete(e.pointerId)) return;
-    if (pts.size) return;
-    const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
-    if (zoom === 1 && dragX) {
-      settling = true;
-      const dx = dragX;
-      dragX = 0;
-      if (Math.abs(dx) > 60) (dx > 0 ? prev : next)();
+    panning = false;
+    if (pts.size) {
+      // 双指里先抬起一根：从剩下那根手指的位置接着拖
+      const [rest] = [...pts.values()];
+      restart(rest!.x, rest!.y);
       return;
     }
-    if (moved < 10) {
+    if (mode === "swipe") {
+      mode = "none";
+      settling = true;
+      const dx = dragX;
+      const dir = dx < 0 ? 1 : -1;
+      const can = dir > 0 ? index < photos.length - 1 : index > 0;
+      if (Math.abs(dx) > 60 && can && e.type === "pointerup") {
+        // 旧图顺着方向滑出去，新图从另一侧滑进来
+        const w = stageEl!.clientWidth;
+        dragX = -dir * w;
+        setTimeout(() => {
+          settling = false;
+          slideIn = dir * w;
+          index += dir;
+        }, 160);
+      } else dragX = 0;
+      return;
+    }
+    if (mode === "pinch") {
+      mode = "none";
+      if (zoom < 1.05) {
+        settling = true;
+        zoomAt(1, 0, 0);
+      }
+      return;
+    }
+    const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+    mode = "none";
+    if (moved < 10 && e.type === "pointerup") {
       const now = Date.now();
       if (now - lastTap < 300) {
         lastTap = 0;
@@ -288,6 +363,12 @@
     settling = false;
     zoomAt(zoom * Math.exp(-e.deltaY / 300), e.clientX, e.clientY);
   }
+  // 窗口大小变了也要守住边界
+  $effect(() => {
+    const onResize = () => clampPan();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  });
 </script>
 
 <svelte:window onkeydown={onkey} />
@@ -312,7 +393,7 @@
         <video src={url} controls autoplay playsinline></video>
       {:else if url}
         {#key photo.key}<img
-          src={url} alt={photo.item.n} decoding="async" draggable="false" class:settling
+          bind:this={imgEl} src={url} alt={photo.item.n} decoding="async" draggable="false" class:settling class:zoomed={zoom > 1} class:panning
           style:transform="translate({tx + dragX}px, {ty}px) scale({zoom})"
         />{/key}
       {/if}
@@ -368,7 +449,9 @@
   .bar .icon-btn.on { background: #ffffff33; }
   .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; opacity: 0.85; }
   .stage { position: relative; display: grid; place-items: center; overflow: hidden; min-height: 0; touch-action: none; }
-  .stage img { will-change: transform; cursor: zoom-in; user-select: none; -webkit-user-drag: none; }
+  .stage img { will-change: transform; user-select: none; -webkit-user-drag: none; }
+  .stage img.zoomed { cursor: grab; }
+  .stage img.panning { cursor: grabbing; }
   .stage img.settling { transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1); }
   img, video { max-width: 100%; max-height: 100%; object-fit: contain; grid-area: 1 / 1; }
   .motion { z-index: 1; width: 100%; height: 100%; object-fit: contain; }

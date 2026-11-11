@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import Tile from "./Tile.svelte";
   import { dayKey, dayLabel } from "../lib/media";
   import type { Photo } from "../lib/library.svelte";
@@ -43,17 +44,20 @@
   type Row = { key: string; top: number; h: number } & ({ head: true; g: (typeof groups)[number] } | { head: false; g: (typeof groups)[number]; from: number });
   const layout = $derived.by(() => {
     const rows: Row[] = [];
+    /** 每一天第一行照片的位置（找某张照片在哪一行用） */
+    const firstRow: number[] = [];
     let y = 0;
     for (const g of groups) {
       rows.push({ key: "h" + g.key, top: y, h: HEAD, head: true, g });
       y += HEAD;
+      firstRow.push(y);
       for (let i = 0; i < g.items.length; i += cols) {
         rows.push({ key: `${g.key}/${i}`, top: y, h: size, head: false, g, from: i });
         y += size + gap;
       }
       y += DAY_GAP - gap;
     }
-    return { rows, height: y };
+    return { rows, firstRow, height: y };
   });
 
   /** 第一个底边在 y 下面的行（二分）。 */
@@ -81,11 +85,62 @@
     return out;
   });
 
+  /** 第 i 张照片所在那一行的顶边（在照片墙里的位置）。 */
+  function topOf(i: number): number | null {
+    let lo = 0;
+    let hi = groups.length - 1;
+    if (hi < 0 || i < 0 || i >= photos.length) return null;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (groups[mid]!.start <= i) lo = mid;
+      else hi = mid - 1;
+    }
+    const g = groups[lo]!;
+    return layout.firstRow[lo]! + Math.floor((i - g.start) / cols) * (size + gap);
+  }
+
+  /** 关掉大图时：看的那张不在屏幕上，就把照片墙滚到它那一行。 */
+  export function reveal(i: number) {
+    const top = topOf(i);
+    if (top === null || !box) return;
+    measure();
+    if (top >= viewTop && top + size <= viewTop + viewH) return;
+    const pageTop = box.getBoundingClientRect().top + window.scrollY;
+    window.scrollTo({ top: Math.max(0, pageTop + top - (viewH - size) / 2) });
+    measure();
+  }
+
+  // 前面插进新照片（上传完、后台刷新）时，用户正在往下看：保持眼前那张照片不动
+  let anchor: { key: string; off: number } | null = null;
+  function remember() {
+    anchor = null;
+    if (viewTop <= 0) return; // 在最顶上就让新照片直接出现
+    for (const r of visible) {
+      if (r.head || r.top + r.h < viewTop) continue;
+      const p = r.g.items[r.from];
+      if (p) anchor = { key: p.key, off: r.top - viewTop };
+      return;
+    }
+  }
+  $effect(() => {
+    void layout;
+    untrack(() => {
+      const a = anchor;
+      if (a && box) {
+        const top = topOf(photos.findIndex((p) => p.key === a.key));
+        const delta = top === null ? 0 : top - viewTop - a.off;
+        if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
+      }
+      measure();
+    });
+  });
+
   function measure() {
     if (!box) return;
     const rect = box.getBoundingClientRect();
     viewTop = -rect.top;
     viewH = window.innerHeight;
+    untrack(remember);
   }
   $effect(() => {
     if (!box) return;
@@ -94,6 +149,8 @@
     const onMq = () => (narrow = mq.matches);
     onMq();
     mq.addEventListener("change", onMq);
+    // 第一帧就按真实宽度排，不等 ResizeObserver
+    width = el.clientWidth;
     const ro = new ResizeObserver(() => {
       width = el.clientWidth;
       measure();
@@ -153,7 +210,7 @@
 {/if}
 
 <style>
-  .wall { position: relative; }
+  .wall { position: relative; overflow-anchor: none; }
   h3 {
     position: absolute; left: 0; right: 0; height: 38px; margin: 0; padding-bottom: 8px; box-sizing: border-box;
     font-size: 15px; font-weight: 500; display: flex; align-items: flex-end; gap: 8px;
