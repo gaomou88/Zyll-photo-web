@@ -271,7 +271,7 @@
           <div class="notice">
             <Icon name="warn" />
             <span class="grow">
-              {a.label}：{a.state === "signin" ? t("登录已过期") : a.state === "error" ? a.error : a.readOnly || (a.migrating ? t("手机正在搬迁存储位置，暂时不能在这里上传或删除照片") : a.lostUploads.length ? t("这些照片在手机搬迁存储位置时丢了，请重新上传：{names}", { names: a.lostUploads.join(", ") }) : t("这个账号的备份在别的设备上全部删除过。这个浏览器里还没写进网盘目录的上传和删除已经作废，需要的话请重新上传。"))}
+              {a.label}：{a.state === "signin" ? t("登录已过期") : a.state === "error" ? a.error : a.readOnly || (a.migrating ? t("手机正在搬迁存储位置，暂时不能在这里上传或删除照片") : a.lostUploads.length ? t("这些照片在手机搬迁存储位置时丢了，请重新上传：{names}", { names: a.lostUploads.join(", ") }) : a.wipedDropped ? t("这个账号的备份在别的设备上全部删除过。这个浏览器里还有 {n} 项没写进网盘目录的上传和删除，已经作废，需要的话请重新上传。", { n: a.wipedDropped }) : t("这个账号的备份在别的设备上全部删除过。"))}
             </span>
             {#if a.wipedNotice && !a.readOnly && a.state === "ready"}<button class="btn" onclick={() => (a.wipedNotice = false)}>{t("知道了")}</button>{/if}
             {#if a.state === "signin"}<button class="btn" onclick={() => library.reconnect(a).catch((e) => (toast = e.message))}>{t("重新连接")}</button>{/if}

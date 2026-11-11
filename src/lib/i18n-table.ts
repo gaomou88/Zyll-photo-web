@@ -345,6 +345,7 @@ export const table: Record<string, { en: string; ja: string; "zh-Hant": string }
   "网盘里找不到密钥包了，请刷新页面。": { en: "The key file is no longer in the cloud. Please refresh the page.", ja: "クラウドに鍵ファイルが見つからなくなりました。ページを再読み込みしてください。", "zh-Hant": "雲端硬碟裡找不到金鑰包了，請重新整理頁面。" },
   "{accs} 现在读不到，请先重新连接或刷新页面，再改密码或恢复密钥。": { en: "{accs} can't be read right now. Reconnect or refresh the page first, then change the password or recovery key.", ja: "{accs} を今は読み込めません。先に再接続するかページを再読み込みしてから、パスワードや回復キーを変更してください。", "zh-Hant": "{accs} 現在讀不到，請先重新連線或重新整理頁面，再改密碼或恢復金鑰。" },
   "读不到 {acc} 里的密钥包，请检查网络后再试。": { en: "Couldn't read the key file in {acc}. Check your connection and try again.", ja: "{acc} の鍵ファイルを読み込めませんでした。ネットワークを確認してもう一度お試しください。", "zh-Hant": "讀不到 {acc} 裡的金鑰包，請檢查網路後再試。" },
-  "这个账号的备份在别的设备上全部删除过。这个浏览器里还没写进网盘目录的上传和删除已经作废，需要的话请重新上传。": { en: "All backups in this account were deleted on another device. Uploads and deletions in this browser that hadn't reached the cloud index were discarded; upload again if needed.", ja: "このアカウントのバックアップは別の端末ですべて削除されました。このブラウザでまだクラウドの目録に書き込まれていなかったアップロードと削除は取り消しました。必要なら再度アップロードしてください。", "zh-Hant": "這個帳號的備份在別的裝置上全部刪除過。這個瀏覽器裡還沒寫進雲端硬碟目錄的上傳和刪除已經作廢，需要的話請重新上傳。" },
-  "知道了": { en: "OK", ja: "OK", "zh-Hant": "知道了" },
+  "这个账号的备份在别的设备上全部删除过。这个浏览器里还有 {n} 项没写进网盘目录的上传和删除，已经作废，需要的话请重新上传。": { en: "All backups in this account were deleted on another device. {n} upload(s) and deletion(s) in this browser that hadn't reached the cloud index were discarded; upload again if needed.", ja: "このアカウントのバックアップは別の端末ですべて削除されました。このブラウザでまだクラウドの目録に書き込まれていなかったアップロードと削除 {n} 件は取り消しました。必要なら再度アップロードしてください。", "zh-Hant": "這個帳號的備份在別的裝置上全部刪除過。這個瀏覽器裡還有 {n} 項沒寫進雲端硬碟目錄的上傳和刪除，已經作廢，需要的話請重新上傳。" },
+  "这个账号的备份在别的设备上全部删除过。": { en: "All backups in this account were deleted on another device.", ja: "このアカウントのバックアップは別の端末ですべて削除されました。", "zh-Hant": "這個帳號的備份在別的裝置上全部刪除過。" },
+  "知道了": { en: "OK", ja: "閉じる", "zh-Hant": "知道了" },
 };

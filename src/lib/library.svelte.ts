@@ -153,6 +153,8 @@ export class Account {
   private wipeSeenAt = -1;
   /** 打开页面时发现这个账号的备份在别的设备上删除过，这个浏览器里没写进目录的改动已经丢掉 */
   wipedNotice = $state(false);
+  /** [wipedNotice] 时作废了多少项没写进目录的上传和删除（0 = 没有） */
+  wipedDropped = $state(0);
   /** 上次重读时网盘上那份密钥包的 rev（不管可不可信），换密钥时新的 rev 要比它大 */
   remoteRev = 0;
   /** 搬迁后找不到了、需要重新上传的文件名 */
@@ -363,8 +365,10 @@ export class Account {
   private acceptWiped(w: { at: number } | null) {
     const stored = Number(lsGet(this.wipeKey) ?? 0);
     if (w && w.at > stored) {
-      const had = !!lsGet(this.seqKey) || this.pending().length > 0 || this.pendingDels().length > 0;
+      const dropped = this.pending().length + this.pendingDels().length;
+      const had = !!lsGet(this.seqKey) || dropped > 0;
       if (had) {
+        this.wipedDropped = dropped;
         lsSet(this.seqKey, null);
         lsSet(this.writtenSeqKey, null);
         this.setPending([]);
