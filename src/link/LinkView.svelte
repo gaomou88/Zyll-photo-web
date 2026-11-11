@@ -122,6 +122,8 @@
       // 大图占一条浏览记录：手机上按返回键（或侧滑返回）关掉大图，而不是离开整个页面
       history.pushState({ zyllViewer: true }, "");
       pushed = true;
+      // 看大图时下拉不触发浏览器的“下拉刷新”
+      document.documentElement.style.overscrollBehaviorY = "none";
     }
     viewing = idx;
     const it = items[idx];
@@ -165,6 +167,7 @@
 
   function closeNow() {
     pushed = false;
+    document.documentElement.style.overscrollBehaviorY = "";
     fullJob++;
     viewing = null;
     if (full) URL.revokeObjectURL(full.url);
@@ -174,8 +177,10 @@
     notice = "";
   }
 
-  function onPop() {
+  function onPop(e: PopStateEvent) {
     if (viewing !== null) closeNow();
+    // 刷新前看大图时留下的那条记录：退到它上面没有大图可关，直接再退一步，返回键不会“没反应”
+    else if (!(e.state as { zyllViewer?: boolean } | null)?.zyllViewer) history.back();
   }
 
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -213,11 +218,15 @@
 
   // 手机上左右滑切换、下滑关闭
   let touch: { x: number; y: number } | null = null;
+  // 双指放大过（页面缩放 > 1）：单指拖动是在看细节，交给浏览器平移，不当成翻页或关闭
+  const zoomed = () => (window.visualViewport?.scale ?? 1) > 1.01;
   function onTouchStart(e: TouchEvent) {
-    touch = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+    touch = e.touches.length === 1 && !zoomed() ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
   }
   function onTouchEnd(e: TouchEvent) {
-    if (!touch || viewing === null || e.changedTouches.length !== 1) return;
+    // 这次触摸里出现过第二根手指（在缩放）也不算
+    if (e.touches.length > 0) touch = null;
+    if (!touch || viewing === null || e.changedTouches.length !== 1 || zoomed()) return;
     const dx = e.changedTouches[0].clientX - touch.x;
     const dy = e.changedTouches[0].clientY - touch.y;
     touch = null;
@@ -375,7 +384,7 @@
   .big { color: #eee; text-align: center; max-width: 320px; padding: 0 16px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
   .big p { margin: 0; line-height: 1.5; }
   .big button { background: rgba(255, 255, 255, 0.16); color: #fff; border: none; border-radius: 8px; padding: 8px 16px; }
-  .stage { touch-action: pinch-zoom; position: relative; flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
+  .stage { touch-action: manipulation; position: relative; flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
   .stage img, .stage video { max-width: 100%; max-height: 100%; object-fit: contain; }
   .stage .blur { filter: blur(8px); opacity: 0.6; position: absolute; }
   .loading { color: #ddd; position: relative; }
