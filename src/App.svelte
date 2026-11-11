@@ -198,13 +198,13 @@
   }
   $effect(() => {
     const timer = setInterval(() => {
-      if (library.unlocked && autoLock > 0 && !uploads.running && Date.now() - lastActive > autoLock * 60_000) lockNow();
+      if (library.unlocked && autoLock > 0 && !uploads.running && !library.newKeyPending && Date.now() - lastActive > autoLock * 60_000) lockNow();
     }, 30_000);
     return () => clearInterval(timer);
   });
 
   function beforeUnload(e: BeforeUnloadEvent) {
-    if (uploads.running) e.preventDefault();
+    if (uploads.running || library.newKeyPending) e.preventDefault();
   }
 </script>
 

@@ -776,6 +776,8 @@ class Library {
   accounts = $state<Account[]>([]);
   /** 至少一把密钥已经解锁 */
   unlocked = $state(false);
+  /** 刚换了新的恢复密钥、用户还没确认抄下：这段时间不自动上锁，关页面前提醒。 */
+  newKeyPending = $state(false);
 
   constructor() {
     this.accounts = loadAccounts().map((a) => new Account(a));
@@ -1001,7 +1003,7 @@ class Library {
         await a.writeBundle(r.json);
       } catch (e) {
         a.noteError(e);
-        failed.push(`${a.label}（${(e as Error).message}）`);
+        failed.push(`${a.label} (${(e as Error).message})`);
       }
     }
     // 一个都没写成：新的密码或恢复密钥没有生效，不要让用户以为换好了
