@@ -55,6 +55,8 @@ export interface UnlockedVault {
   vaultId: string;
   /** 包裹每个文件 DEK 的子密钥（不可导出）。 */
   wrapKey: CryptoKey;
+  /** 核对密钥包 mac 用的 HMAC 密钥（不可导出，只能验证），见 [verifyWithKey]。 */
+  macKey: CryptoKey;
 }
 
 /** 从 MK 原始字节派生 K_wrap 的原始字节（仅测试与 Android 互验用）。 */
@@ -70,8 +72,9 @@ export async function vaultFromMasterKey(vaultId: string, mk: Uint8Array): Promi
     false,
     ["encrypt", "decrypt"],
   );
+  const macKey = await macKeyFromMasterKey(mk);
   mk.fill(0);
-  return { vaultId, wrapKey };
+  return { vaultId, wrapKey, macKey };
 }
 
 async function recoveryKek(recoveryKey: Uint8Array, salt: Uint8Array): Promise<CryptoKey> {
@@ -266,6 +269,31 @@ export async function verify(f: KeyBundleFile, wrapKeyBytes: Uint8Array): Promis
     return false;
   }
   return bytesEqual(got, await macOf(f, wrapKeyBytes));
+}
+
+/**
+ * 从 MK 派生核对 mac 用的 HMAC 密钥（不可导出，只能验证）。解锁时和 K_wrap 一起派生，
+ * 之后主线程不用 MK 也能判断网盘上的密钥包是不是有这套密钥的设备写的。
+ */
+export async function macKeyFromMasterKey(mk: Uint8Array): Promise<CryptoKey> {
+  const wrap = await deriveWrapKeyBytes(mk);
+  const raw = await hkdfSha256(wrap, new Uint8Array(0), utf8("zyll/v1/keybundle-mac"), 32);
+  wrap.fill(0);
+  const key = await subtle().importKey("raw", new Uint8Array(raw), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  raw.fill(0);
+  return key;
+}
+
+/** 用 [macKeyFromMasterKey] 的密钥核对 mac。没有 mac 的旧密钥包返回 false。 */
+export async function verifyWithKey(f: KeyBundleFile, macKey: CryptoKey): Promise<boolean> {
+  if (!f.mac) return false;
+  let got: Uint8Array;
+  try {
+    got = fromBase64(f.mac);
+  } catch {
+    return false;
+  }
+  return subtle().verify("HMAC", macKey, new Uint8Array(got), new Uint8Array(macInput(f)));
 }
 
 /**

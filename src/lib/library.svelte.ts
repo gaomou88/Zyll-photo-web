@@ -45,6 +45,8 @@ export const deviceId: string = (() => {
 
 /** 解锁后的包裹密钥：vaultId → K_wrap（不可导出，只在内存里）。 */
 const keyring = new Map<string, CryptoKey>();
+/** 核对密钥包 mac 用的密钥（按 vaultId），和 keyring 一起在解锁时派生。 */
+const macring = new Map<string, CryptoKey>();
 
 /** 出错时带上是哪一步（方便用户截图反馈）；需要解锁、需要登录的照原样抛出。 */
 async function step<T>(label: string, job: () => Promise<T>): Promise<T> {
@@ -72,6 +74,24 @@ async function readMarker(d: Drive): Promise<{ state: string; to: string; at: nu
 }
 
 const MIGRATING = () => t("手机正在搬迁这个网盘的存储位置，搬完前网页版不能在这里上传或删除照片。");
+
+/** 别的设备删除全部备份数据时在每个账号里留下的“已清空”标记（spec/wipe.md）。 */
+const WIPED_PATH = [ENCRYPTED_FOLDER, "wiped.json"];
+
+async function readWiped(d: Drive): Promise<{ at: number } | null> {
+  const id = await d.findFile(WIPED_PATH);
+  if (!id) return null;
+  try {
+    const o = JSON.parse(text.decode(await d.download(id)));
+    if (o?.format !== "zyll-wiped") return null;
+    const at = Number(o.at) || 0;
+    return at > 0 ? { at } : null;
+  } catch {
+    return null;
+  }
+}
+
+const WIPED = () => t("这个账号的备份刚在别的设备上全部删除了，网页版不再往里写。请刷新页面。");
 
 export class Locked extends Error {
   constructor() {
@@ -129,6 +149,12 @@ export class Account {
   /** 搬迁标记超过 3 天没更新（搬的手机可能不在了），可以让用户选择不再等它 */
   migrationStale = $state(false);
   private markerAt = 0;
+  /** 打开页面时看到的“已清空”标记时间（-1 = 还没读过）；之后标记变新了，说明这期间别的设备删除了全部备份 */
+  private wipeSeenAt = -1;
+  /** 打开页面时发现这个账号的备份在别的设备上删除过，这个浏览器里没写进目录的改动已经丢掉 */
+  wipedNotice = $state(false);
+  /** 上次重读时网盘上那份密钥包的 rev（不管可不可信），换密钥时新的 rev 要比它大 */
+  remoteRev = 0;
   /** 搬迁后找不到了、需要重新上传的文件名 */
   lostUploads = $state<string[]>([]);
   items = $state.raw<IndexItem[]>([]);
@@ -171,6 +197,12 @@ export class Account {
   wrapKey(): CryptoKey | null {
     const id = this.bundleVaultId;
     return id ? (keyring.get(id) ?? null) : null;
+  }
+
+  /** 核对这套密钥的密钥包 mac 用的密钥（没解锁时为 null）。 */
+  macKey(): CryptoKey | null {
+    const id = this.bundleVaultId;
+    return id ? (macring.get(id) ?? null) : null;
   }
 
   /** 条目能不能在这里解密：不加密的都能；加密的要解锁，而且不是用另一套旧密钥加密的。 */
@@ -216,6 +248,7 @@ export class Account {
       } else if (opts.fresh) {
         const v = await keybundle.vaultFromMasterKey(opts.fresh.vaultId, opts.fresh.masterKey);
         keyring.set(v.vaultId, v.wrapKey);
+        macring.set(v.vaultId, v.macKey);
         json = opts.fresh.json;
       }
       if (opts.visible && this.drive instanceof GoogleDrive && (this.drive as GoogleDrive).root === "appDataFolder") {
@@ -271,29 +304,83 @@ export class Account {
 
   /**
    * 换上同一套密钥的新版密钥包（改了密码或换了恢复密钥）。写之前再读一次网盘上的：不是同一套、
-   * 或者已经有更新的（别的设备刚改过）就不写，抛出错误。手机正在搬存储位置时也不写。
+   * 或者已经有更新的（别的设备刚改过，mac 也对得上）就不写，抛出错误。
+   * 网盘上那份 rev 更大、mac 却对不上（被改过或写坏了）：不可信，照常覆盖。
+   * 手机正在搬存储位置、或者这个账号刚在别的设备上删除了全部备份时也不写。
    */
   async writeBundle(json: string) {
     await this.lock(async () => {
       if (this.migrating) throw new Error(t("手机正在搬迁存储位置，搬完前不能在这里上传或删除照片。"));
+      await this.checkWiped();
       const next = keybundle.parse(json);
       const id = await this.drive.findFile(KEYBUNDLE_PATH);
       if (id) {
         const cur = keybundle.parse(text.decode(await this.drive.download(id)));
         if (cur.vaultId !== next.vaultId) throw new Error(t("这个网盘里是另一套密钥，没有改它。"));
-        if (keybundle.revOf(cur) >= keybundle.revOf(next)) throw new Error(t("另一台设备刚改过密码或恢复密钥，请刷新页面后再试。"));
+        if (keybundle.revOf(cur) >= keybundle.revOf(next)) {
+          const mk = this.macKey();
+          if (!mk || (await keybundle.verifyWithKey(cur, mk))) throw new Error(t("另一台设备刚改过密码或恢复密钥，请刷新页面后再试。"));
+          console.warn("keybundle has a newer rev but a bad mac; replacing it");
+        }
+      } else if (this.bundleJson) {
+        // 密钥包不见了：多半是别的设备删除了全部备份（checkWiped 已经挡住）或者被人删了，不在这里凭空写回
+        throw new Error(t("网盘里找不到密钥包了，请刷新页面。"));
       }
       await this.drive.upload(KEYBUNDLE_PATH, bytesSource(utf8.encode(json), "application/json"), { replace: true });
       this.bundleJson = json;
     });
   }
 
-  /** 重新读一次网盘上的密钥包（别的设备可能刚改过密码或恢复密钥）。 */
+  /**
+   * 重新读一次网盘上的密钥包（别的设备可能刚改过密码或恢复密钥）。读不到时抛出错误。
+   * 同一套密钥时只换上比现在新、mac 也对得上的那份：旧的（网盘回滚）和被改过的都不要。
+   */
   async reloadBundle() {
     await this.lock(async () => {
       const id = await this.drive.findFile(KEYBUNDLE_PATH);
-      if (id) this.bundleJson = text.decode(await this.drive.download(id));
+      if (!id) return;
+      const json = text.decode(await this.drive.download(id));
+      const f = keybundle.parse(json);
+      this.remoteRev = keybundle.revOf(f);
+      const cur = this.bundleJson ? keybundle.parse(this.bundleJson) : null;
+      const mk = this.macKey();
+      if (cur && mk && cur.vaultId === f.vaultId) {
+        if (keybundle.revOf(f) > keybundle.revOf(cur) && (await keybundle.verifyWithKey(f, mk))) this.bundleJson = json;
+        return;
+      }
+      this.bundleJson = json;
     });
+  }
+
+  private get wipeKey() {
+    return `zyll-wiped-${this.key}`;
+  }
+
+  /**
+   * 打开页面（[load]）时读“已清空”标记：比这个浏览器上次见过的新，说明别的设备删除过全部备份，
+   * 这里没写进目录的上传、删除和见过的目录序号都作废（不然会把它们写回空账号，或者把新库当成“被还原过”）。
+   */
+  private acceptWiped(w: { at: number } | null) {
+    const stored = Number(lsGet(this.wipeKey) ?? 0);
+    if (w && w.at > stored) {
+      const had = !!lsGet(this.seqKey) || this.pending().length > 0 || this.pendingDels().length > 0;
+      if (had) {
+        lsSet(this.seqKey, null);
+        lsSet(this.writtenSeqKey, null);
+        this.setPending([]);
+        this.setPendingDels([]);
+        this.wipedNotice = true;
+      }
+      lsSet(this.wipeKey, String(w.at));
+    }
+    this.wipeSeenAt = w?.at ?? 0;
+  }
+
+  /** 写网盘之前：页面打开以后别的设备删除了全部备份，就不再写（只读，提示刷新）。共享相册写之前也调用。 */
+  async checkWiped() {
+    const w = await readWiped(this.drive);
+    if (this.wipeSeenAt >= 0 && w && w.at > this.wipeSeenAt) this.readOnly = WIPED();
+    if (this.readOnly === WIPED()) throw new Error(this.readOnly);
   }
 
   /** 操作中途登录过期：切到“需要重新连接”状态，界面会显示提示条。 */
@@ -323,6 +410,7 @@ export class Account {
     try {
       await this.lock(async () => {
         if (this.drive instanceof GoogleDrive) await step(t("查找存放位置"), () => this.resolveGoogleRoot());
+        this.acceptWiped(await step(t("查找密钥包"), () => readWiped(this.drive)));
         const id = await step(t("查找密钥包"), () => this.drive.findFile(KEYBUNDLE_PATH));
         this.bundleJson = id ? await step(t("读取密钥包"), async () => text.decode(await this.drive.download(id))) : null;
         const p = await step(t("读取备份目录"), () => this.pull());
@@ -416,6 +504,9 @@ export class Account {
       this.readOnly = t("网盘上的备份目录比这个浏览器上次看到的旧（手机选了“以网盘为准”，或者被还原过），暂时只能浏览。确认是手机上操作的，可以在设置里点“以网盘为准”。");
     }
     this.noteMarker(await readMarker(this.drive));
+    // 页面打开以后别的设备删除了全部备份：之后都只读（commit 读完目录就会看到 readOnly 而停下）
+    const w = this.wipeSeenAt >= 0 ? await readWiped(this.drive) : null;
+    if (w && w.at > this.wipeSeenAt) this.readOnly = WIPED();
     return { merged, encId, plainId, extra };
   }
 
@@ -583,6 +674,7 @@ export class Account {
   /** 网盘上的存储位置标记：手机开始搬迁或已经搬走，就不再开始新的上传。 */
   private async checkMarker() {
     this.noteMarker(await readMarker(this.drive));
+    await this.checkWiped();
     if (this.readOnly) throw new Error(this.readOnly);
     if (this.migrating) throw new Error(MIGRATING());
   }
@@ -960,6 +1052,7 @@ class Library {
           const r = await runKdf(recovery ? { op: "unlockRecovery", json, recoveryKey: secret } : { op: "unlockPassword", json, password: secret });
           const v = await keybundle.vaultFromMasterKey(r.vaultId, r.masterKey!);
           keyring.set(v.vaultId, v.wrapKey);
+          macring.set(v.vaultId, v.macKey);
           ok++;
           break;
         } catch (e) {
@@ -984,13 +1077,28 @@ class Library {
     if (!ids.size) throw new Locked();
     if (ids.size > 1) throw new Error(t("你的网盘账号里有不止一套密钥，请先在手机 Zyll 上处理好，再来改密码或恢复密钥。"));
     const vaultId = [...ids][0]!;
+    // 每个账号都要读得到：读不到的账号里可能正放着别的设备刚改的那份，悄悄盖掉就丢了那边的修改
+    const unreachable = this.accounts.filter((a) => a.state === "loading" || a.state === "signin" || a.state === "error");
+    if (unreachable.length) {
+      throw new Error(t("{accs} 现在读不到，请先重新连接或刷新页面，再改密码或恢复密钥。", { accs: unreachable.map((a) => a.label).join(t("、")) }));
+    }
     const holders = this.accounts.filter((a) => a.bundleVaultId === vaultId);
-    // 先读一次各账号网盘上最新的密钥包，别的设备可能刚改过
-    await Promise.all(holders.filter((a) => a.state === "ready").map((a) => a.reloadBundle().catch(() => {})));
+    // 先读一次各账号网盘上最新的密钥包，别的设备可能刚改过（只换上 mac 对得上的）
+    await Promise.all(
+      holders.map(async (a) => {
+        try {
+          await a.reloadBundle();
+        } catch (e) {
+          a.noteError(e);
+          throw new Error(t("读不到 {acc} 里的密钥包，请检查网络后再试。", { acc: a.label }));
+        }
+      }),
+    );
     const same = holders.map((a) => a.bundleJson).filter((j): j is string => !!j && bundleVault(j) === vaultId);
     const sorted = newestFirst(same);
     if (!sorted.length) throw new Locked();
-    const minRev = Math.max(...sorted.map((j) => keybundle.revOf(keybundle.parse(j))));
+    // 新的 rev 要比读到的每一份都大（包括 mac 对不上、没换上的那份），写的时候才不会被当成旧的
+    const minRev = Math.max(...sorted.map((j) => keybundle.revOf(keybundle.parse(j))), ...holders.map((a) => a.remoteRev));
     const r = await runKdf({ op: "rewrap", json: sorted[0]!, secret, recovery, newPassword, minRev });
     if (r.vaultId !== vaultId || !r.json) throw new Error(t("密码或恢复密钥不正确"));
     const failed: string[] = [];
@@ -1014,6 +1122,7 @@ class Library {
   /** 锁上：丢掉内存里的密钥，加密的内容重新需要密码。 */
   lock() {
     keyring.clear();
+    macring.clear();
     this.unlocked = false;
     for (const a of this.accounts) if (a.bundleJson) a.load();
   }
