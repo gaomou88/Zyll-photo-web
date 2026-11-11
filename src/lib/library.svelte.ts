@@ -759,7 +759,7 @@ class Library {
       // ?demo：加密的演示库；?demo=empty：一个空网盘；?demo=two：加密的 + 空的；?demo=share：两个加密的库（试共享相册）
       const { demoDrive, emptyDrive } = await import("./demo");
       const mode = new URLSearchParams(location.search).get("demo");
-      const drives = mode === "empty" ? [emptyDrive()] : mode === "two" ? [await demoDrive(), emptyDrive()] : mode === "share" ? [await demoDrive(), await demoDrive("friend", 4)] : [await demoDrive()];
+      const drives = mode === "empty" ? [emptyDrive()] : mode === "two" ? [await demoDrive(), emptyDrive()] : mode === "share" ? [await demoDrive(), await demoDrive("friend", 4)] : mode === "big" ? [await demoDrive("demo", 24, 5000)] : [await demoDrive()];
       this.accounts = drives.map((d) => {
         const acc = new Account(d.account);
         acc.drive = d;

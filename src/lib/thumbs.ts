@@ -8,18 +8,35 @@ import type { Photo } from "./library.svelte";
 
 const MAX = 800;
 const cache = new Map<string, string>();
-const inflight = new Map<string, Promise<string | null>>();
 let active = 0;
+/** 排队的任务：后进先出（眼前刚出现的图块先加载）；图块离开页面时从队列里撤掉。 */
 const waiting: (() => void)[] = [];
 
-async function slot<T>(job: () => Promise<T>): Promise<T> {
-  if (active >= 6) await new Promise<void>((r) => waiting.push(r));
+class Cancelled extends Error {}
+
+async function slot<T>(job: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (active >= 6) {
+    await new Promise<void>((resolve, reject) => {
+      const go = () => {
+        signal?.removeEventListener("abort", drop);
+        resolve();
+      };
+      const drop = () => {
+        const i = waiting.indexOf(go);
+        if (i >= 0) waiting.splice(i, 1);
+        reject(new Cancelled());
+      };
+      if (signal?.aborted) return drop();
+      signal?.addEventListener("abort", drop, { once: true });
+      waiting.push(go);
+    });
+  }
   active++;
   try {
     return await job();
   } finally {
     active--;
-    waiting.shift()?.();
+    waiting.pop()?.();
   }
 }
 
@@ -36,26 +53,43 @@ export function cachedThumb(p: Photo): string | null {
   return cache.get(p.key) ?? null;
 }
 
-export function thumbUrl(p: Photo): Promise<string | null> {
-  const hit = cache.get(p.key);
-  if (hit) return Promise.resolve(hit);
-  let job = inflight.get(p.key);
-  if (job) return job;
-  job = slot(async () => {
-    const { acc, item } = p;
-    if (!acc.canOpen(item)) return null;
-    let blob = await acc.thumbnail(item).catch((e) => (acc.noteError(e), null));
-    if (!blob && item.m.startsWith("image/") && item.s > 0 && item.s < 25 * 1024 * 1024) {
-      const orig = await acc.original(item).catch(() => null);
-      if (orig) blob = await makeThumbnail(orig, item.m, item.n);
+const CANCELLED = Symbol("cancelled");
+const inflight = new Map<string, Promise<string | null | typeof CANCELLED>>();
+
+/**
+ * [signal] 中止时：还在排队就撤掉、返回 null（已经开始下载的照常做完、放进缓存）。
+ * 排着队的任务被别的图块撤掉了，这里再自己排一次。
+ */
+export async function thumbUrl(p: Photo, signal?: AbortSignal): Promise<string | null> {
+  for (;;) {
+    const hit = cache.get(p.key);
+    if (hit) return hit;
+    if (signal?.aborted) return null;
+    let job = inflight.get(p.key);
+    if (!job) {
+      job = slot(async () => {
+        const { acc, item } = p;
+        if (!acc.canOpen(item)) return null;
+        let blob = await acc.thumbnail(item).catch((e) => (acc.noteError(e), null));
+        if (!blob && item.m.startsWith("image/") && item.s > 0 && item.s < 25 * 1024 * 1024) {
+          const orig = await acc.original(item).catch(() => null);
+          if (orig) blob = await makeThumbnail(orig, item.m, item.n);
+        }
+        if (!blob) return null;
+        const url = URL.createObjectURL(blob);
+        remember(p.key, url);
+        return url;
+      }, signal)
+        .catch((e): typeof CANCELLED => {
+          if (e instanceof Cancelled) return CANCELLED;
+          throw e;
+        })
+        .finally(() => inflight.delete(p.key));
+      inflight.set(p.key, job);
     }
-    if (!blob) return null;
-    const url = URL.createObjectURL(blob);
-    remember(p.key, url);
-    return url;
-  }).finally(() => inflight.delete(p.key));
-  inflight.set(p.key, job);
-  return job;
+    const r = await job;
+    if (r !== CANCELLED) return r;
+  }
 }
 
 /** 锁上时清空（解密出来的图片不留在内存里）。 */

@@ -1,6 +1,6 @@
 import { BlobKind, randomBytes, sha256, sharing, toHex, zylc } from "@zyll/crypto";
 import { ENCRYPTED_FOLDER } from "./config";
-import { GoogleDrive, isSharingDrive, type SharingDrive } from "./drive";
+import { GoogleDrive, ID_RE, isSharingDrive, type SharingDrive } from "./drive";
 import { t } from "./i18n";
 import { decryptKind } from "./zylcio";
 import { Locked, library, lsGet, lsSet, type Account } from "./library.svelte";
@@ -109,7 +109,8 @@ export interface Invite {
 
 export function parseInvite(text: string): Invite | null {
   const o = payload(text, "join");
-  if (o?.format !== "zyll-shared-invite" || !o.folder || !o.album) return null;
+  // 文件夹 id 来自别人：格式不对、或者没有主人安全码（没法核对主人）的链接都不收
+  if (o?.format !== "zyll-shared-invite" || !o.album || !ID_RE.test(String(o.folder ?? "")) || !String(o.code ?? "").trim()) return null;
   return {
     provider: o.provider === "google" ? "google" : "onedrive",
     folder: String(o.folder), album: String(o.album), name: String(o.name ?? ""), owner: String(o.owner ?? ""), code: String(o.code ?? ""),
@@ -223,7 +224,8 @@ function parseIndexJson(b: Uint8Array): Index {
   const o = JSON.parse(dec.decode(b));
   return {
     name: String(o.name ?? ""), seq: Number(o.seq) || 0,
-    items: ((o.items ?? []) as Record<string, any>[]).map((i) => ({
+    // 条目 id 来自主人或管理者：格式不对的条目丢掉，不拼进接口地址
+    items: ((o.items ?? []) as Record<string, any>[]).filter((i) => ID_RE.test(String(i.r)) && (!i.th || ID_RE.test(String(i.th)))).map((i) => ({
       r: String(i.r), n: String(i.n ?? ""), m: String(i.m ?? ""), t: Number(i.t) || 0, s: Number(i.s) || 0, h: String(i.h ?? ""), th: String(i.th ?? ""),
       dk: i.dk ? unb64(i.dk) : null, tk: i.tk ? unb64(i.tk) : null, by: String(i.by ?? ""),
     })),
@@ -433,6 +435,7 @@ class SharedAlbums {
       }
       if (o) {
         for (const a of (o.albums ?? []) as Record<string, any>[]) {
+          if (!ID_RE.test(String(a.f))) continue;
           remote.push({
             albumId: String(a.a), acc: acc.key, folderId: String(a.f), name: String(a.n ?? ""), myRole: isRole(a.role) ? a.role : null,
             ownerEmail: String(a.oe ?? ""), ownerCode: String(a.oc ?? ""), count: Number(a.c) || 0, addedAt: Number(a.t) || 0, seq: Number(a.seq) || 0,
@@ -516,6 +519,8 @@ class SharedAlbums {
     const seen = Number(lsGet(seqKey(ref.albumId)) ?? 0);
     if (m.albumId !== ref.albumId || m.seq < seen) throw new Tampered();
     if (ref.ownerCode && m.owner.code !== ref.ownerCode) throw new Tampered();
+    // 旧记录里没有主人安全码：第一次读到时记下并固定，之后主人变了就拒绝
+    if (!ref.ownerCode && this.albums.some((a) => a.albumId === ref.albumId)) this.saveRef({ ...ref, ownerCode: m.owner.code });
     lsSet(seqKey(ref.albumId), String(m.seq));
     return m;
   }

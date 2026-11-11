@@ -316,4 +316,5 @@ export const table: Record<string, { en: string; ja: string; "zh-Hant": string }
   "共享相册列表是用另一套密钥写的，暂时不改它": { en: "The shared album list was written with another key; leaving it unchanged for now", ja: "共有アルバムのリストは別の鍵で書かれているため、今は変更しません", "zh-Hant": "共享相簿清單是用另一套金鑰寫的，暫時不改它" },
   "暂时读不到，请稍后再试": { en: "Can't read it right now. Try again later", ja: "今は読み込めません。しばらくしてからもう一度お試しください", "zh-Hant": "暫時讀不到，請稍後再試" },
   "相册刚被别人改过，请再试一次": { en: "Someone just changed this album. Please try again", ja: "このアルバムはたった今ほかの人に変更されました。もう一度お試しください", "zh-Hant": "相簿剛被別人改過，請再試一次" },
+  "网盘文件 id 格式不对": { en: "Invalid cloud file ID", ja: "クラウドのファイル ID の形式が正しくありません", "zh-Hant": "雲端硬碟檔案 id 格式不對" },
 };

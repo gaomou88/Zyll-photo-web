@@ -25,70 +25,145 @@
     return out;
   });
 
-  // 一次只渲染一部分，滚到底再加（几万张照片也不卡）
-  let limit = $state(400);
-  const shown = $derived.by(() => {
-    const out: typeof groups = [];
-    let n = 0;
+  // ---------- 窗口化：只渲染屏幕附近的行，滚过去的图块会被移出页面 ----------
+
+  let box = $state<HTMLElement>();
+  let width = $state(0);
+  let narrow = $state(false);
+  let viewTop = $state(0);
+  let viewH = $state(800);
+
+  // 和原来的 CSS 网格一样：宽屏每格至少 150px、间隔 3px；手机每行 3 张、间隔 2px
+  const gap = $derived(narrow ? 2 : 3);
+  const cols = $derived(narrow ? 3 : Math.max(1, Math.floor((width + gap) / (150 + gap))));
+  const size = $derived(width ? (width - gap * (cols - 1)) / cols : 150);
+  const HEAD = 38;
+  const DAY_GAP = 18;
+
+  type Row = { key: string; top: number; h: number } & ({ head: true; g: (typeof groups)[number] } | { head: false; g: (typeof groups)[number]; from: number });
+  const layout = $derived.by(() => {
+    const rows: Row[] = [];
+    let y = 0;
     for (const g of groups) {
-      if (n >= limit) break;
-      out.push(g);
-      n += g.items.length;
+      rows.push({ key: "h" + g.key, top: y, h: HEAD, head: true, g });
+      y += HEAD;
+      for (let i = 0; i < g.items.length; i += cols) {
+        rows.push({ key: `${g.key}/${i}`, top: y, h: size, head: false, g, from: i });
+        y += size + gap;
+      }
+      y += DAY_GAP - gap;
+    }
+    return { rows, height: y };
+  });
+
+  /** 第一个底边在 y 下面的行（二分）。 */
+  function firstBelow(y: number): number {
+    const rows = layout.rows;
+    let lo = 0;
+    let hi = rows.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const r = rows[mid]!;
+      if (r.top + r.h < y) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+  const visible = $derived.by(() => {
+    const margin = viewH; // 上下各多渲染一屏
+    const from = firstBelow(viewTop - margin);
+    const out: Row[] = [];
+    for (let i = from; i < layout.rows.length; i++) {
+      const r = layout.rows[i]!;
+      if (r.top > viewTop + viewH + margin) break;
+      out.push(r);
     }
     return out;
   });
-  let sentinel = $state<HTMLElement>();
+
+  function measure() {
+    if (!box) return;
+    const rect = box.getBoundingClientRect();
+    viewTop = -rect.top;
+    viewH = window.innerHeight;
+  }
   $effect(() => {
-    if (!sentinel) return;
-    const io = new IntersectionObserver((es) => {
-      if (es.some((e) => e.isIntersecting)) limit += 400;
-    }, { rootMargin: "1200px" });
-    io.observe(sentinel);
-    return () => io.disconnect();
+    if (!box) return;
+    const el = box;
+    const mq = window.matchMedia("(max-width: 600px)");
+    const onMq = () => (narrow = mq.matches);
+    onMq();
+    mq.addEventListener("change", onMq);
+    const ro = new ResizeObserver(() => {
+      width = el.clientWidth;
+      measure();
+    });
+    ro.observe(el);
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        measure();
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    measure();
+    return () => {
+      mq.removeEventListener("change", onMq);
+      ro.disconnect();
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      cancelAnimationFrame(raf);
+    };
   });
+
   const selecting = $derived(selected.size > 0);
 </script>
 
 {#if photos.length === 0}
   <p class="empty muted">{empty}</p>
 {:else}
-  {#each shown as g (g.key)}
-    {@const all = g.items.every((p) => selected.has(p.key))}
-    <section class="day">
-      <h3>
-        <button class="daycheck" class:on={all} class:show={selecting} onclick={() => ontoggleday(g.items.map((p) => p.key))} aria-label={t("选择这一天")}>✓</button>
-        {g.label}
-      </h3>
-      <div class="grid">
-        {#each g.items as p, j (p.key)}
-          <Tile
-            photo={p}
-            selected={selected.has(p.key)}
-            {selecting}
-            onopen={() => onopen(g.start + j)}
-            ontoggle={(shift) => ontoggle(g.start + j, shift)}
-          />
-        {/each}
-      </div>
-    </section>
-  {/each}
-  <div bind:this={sentinel} class="sentinel"></div>
+  <div class="wall" bind:this={box} style:height="{layout.height}px">
+    {#each visible as r (r.key)}
+      {#if r.head}
+        {@const all = r.g.items.every((p) => selected.has(p.key))}
+        <h3 style:top="{r.top}px">
+          <button class="daycheck" class:on={all} class:show={selecting} onclick={() => ontoggleday(r.g.items.map((p) => p.key))} aria-label={t("选择这一天")}>✓</button>
+          {r.g.label}
+        </h3>
+      {:else}
+        {@const g = r.g}
+        {@const from = r.from}
+        <div class="row" style:top="{r.top}px" style:height="{r.h}px" style:grid-template-columns="repeat({cols}, 1fr)" style:gap="{gap}px">
+          {#each g.items.slice(from, from + cols) as p, j (p.key)}
+            <Tile
+              photo={p}
+              selected={selected.has(p.key)}
+              {selecting}
+              onopen={() => onopen(g.start + from + j)}
+              ontoggle={(shift) => ontoggle(g.start + from + j, shift)}
+            />
+          {/each}
+        </div>
+      {/if}
+    {/each}
+  </div>
 {/if}
 
 <style>
-  /* 屏幕外的日期分组不排版不绘制，几千张照片滚动也流畅 */
-  .day { margin-bottom: 18px; content-visibility: auto; contain-intrinsic-size: auto 420px; }
+  .wall { position: relative; }
   h3 {
-    margin: 0 0 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 8px;
+    position: absolute; left: 0; right: 0; height: 38px; margin: 0; padding-bottom: 8px; box-sizing: border-box;
+    font-size: 15px; font-weight: 500; display: flex; align-items: flex-end; gap: 8px;
   }
+  .row { position: absolute; left: 0; right: 0; display: grid; }
   .daycheck {
     width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--muted); background: none;
     font-size: 12px; color: transparent; padding: 0; display: none;
   }
   h3:hover .daycheck, .daycheck.show { display: inline-grid; place-items: center; }
   .daycheck.on { background: var(--select); border-color: var(--select); color: #fff; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 3px; }
-  @media (max-width: 600px) { .grid { grid-template-columns: repeat(3, 1fr); gap: 2px; } }
   .empty { text-align: center; padding: 80px 16px; font-size: 15px; }
-  .sentinel { height: 1px; }
 </style>
