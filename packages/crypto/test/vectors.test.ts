@@ -85,3 +85,38 @@ describe("keybundle", () => {
     expect(kb.parseRecoveryKey(s)).toEqual(key);
   });
 });
+
+describe("keybundle rev / mac", () => {
+  const v = load("keybundle-mac.json");
+  for (const c of v.bundles as any[]) it(`mac ${c.name}`, async () => {
+    const f = kb.parse(JSON.stringify(c.bundle));
+    const wk = fromHex(c.wrapKey);
+    expect(new TextDecoder().decode(kb.macInput(f))).toBe(c.macInput);
+    expect(await kb.verify(f, wk)).toBe(true);
+    expect((await kb.sign({ ...f, mac: undefined }, wk)).mac).toBe(f.mac);
+    expect(await kb.verify({ ...f, rev: f.rev! + 1 }, wk)).toBe(false);
+    expect(await kb.verify(f, new Uint8Array(32))).toBe(false);
+  });
+
+  it("rewrap keeps the master key and retires the old secret", async () => {
+    const params = { memoryKiB: 8192, iterations: 1, parallelism: 1 };
+    const mk = randomMk();
+    const base = await kb.createWith({ vaultId: "v1", masterKey: mk, recoveryKey: new Uint8Array(32).fill(3), pwSalt: new Uint8Array(16), pwNonce: new Uint8Array(12), rcSalt: new Uint8Array(16), rcNonce: new Uint8Array(12).fill(1) }, "old pass 123", params);
+    const rk = new Uint8Array(32).fill(9);
+    const json = await kb.rewrap(JSON.stringify(base), mk, { newRecoveryKey: rk, minRev: 5, now: 1 });
+    const f = kb.parse(json);
+    expect(kb.revOf(f)).toBe(6);
+    expect(await kb.verify(f, await kb.deriveWrapKeyBytes(mk))).toBe(true);
+    expect((await kb.unwrapWithRecoveryKey(json, kb.formatRecoveryKey(rk))).masterKey).toEqual(mk);
+    expect((await kb.unwrapWithPassword(json, "old pass 123")).masterKey).toEqual(mk);
+    await expect(kb.unwrapWithRecoveryKey(json, kb.formatRecoveryKey(new Uint8Array(32).fill(3)))).rejects.toThrow();
+    const json2 = await kb.rewrap(json, mk, { newPassword: "new pass 456", params, now: 1 });
+    expect(kb.revOf(kb.parse(json2))).toBe(7);
+    expect((await kb.unwrapWithPassword(json2, "new pass 456")).masterKey).toEqual(mk);
+    await expect(kb.unwrapWithPassword(json2, "old pass 123")).rejects.toThrow();
+  }, 60_000);
+});
+
+function randomMk() {
+  return globalThis.crypto.getRandomValues(new Uint8Array(32));
+}
