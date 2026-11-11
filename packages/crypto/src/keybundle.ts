@@ -1,5 +1,5 @@
 import {
-  ZyllCryptoError, aesGcmDecrypt, aesGcmEncrypt, argon2id, fromBase64, hkdfSha256, importAesKey,
+  ZyllCryptoError, aesGcmDecrypt, aesGcmEncrypt, argon2id, bytesEqual, fromBase64, hkdfSha256, importAesKey,
   randomBytes, subtle, toBase64, utf8,
 } from "./primitives";
 
@@ -27,6 +27,10 @@ export interface KeyBundleFile {
   version: number;
   vaultId: string;
   slots: KeySlot[];
+  /** 修改先后（毫秒时间，单调递增）。旧版本没有，按 0 算。见 spec/keybundle.md §5。 */
+  rev?: number;
+  /** HMAC-SHA256(HKDF(K_wrap, "zyll/v1/keybundle-mac"), macInput)，证明是手里有这套密钥的设备写的。 */
+  mac?: string;
 }
 
 export interface Argon2Params {
@@ -51,6 +55,8 @@ export interface UnlockedVault {
   vaultId: string;
   /** 包裹每个文件 DEK 的子密钥（不可导出）。 */
   wrapKey: CryptoKey;
+  /** 核对密钥包 mac 用的 HMAC 密钥（不可导出，只能验证），见 [verifyWithKey]。 */
+  macKey: CryptoKey;
 }
 
 /** 从 MK 原始字节派生 K_wrap 的原始字节（仅测试与 Android 互验用）。 */
@@ -66,8 +72,9 @@ export async function vaultFromMasterKey(vaultId: string, mk: Uint8Array): Promi
     false,
     ["encrypt", "decrypt"],
   );
+  const macKey = await macKeyFromMasterKey(mk);
   mk.fill(0);
-  return { vaultId, wrapKey };
+  return { vaultId, wrapKey, macKey };
 }
 
 async function recoveryKek(recoveryKey: Uint8Array, salt: Uint8Array): Promise<CryptoKey> {
@@ -223,4 +230,90 @@ export function parseRecoveryKey(text: string): Uint8Array {
     }
   }
   return new Uint8Array(out);
+}
+
+// ---------- rev 和 mac（spec/keybundle.md §5） ----------
+
+export const revOf = (f: KeyBundleFile): number => (typeof f.rev === "number" && Number.isFinite(f.rev) ? f.rev : 0);
+
+/** 参与 mac 的内容，逐项用换行隔开；没有的数字字段写空串。和 Android 端 KeyBundle.macInput 一致。 */
+export function macInput(f: KeyBundleFile): Uint8Array {
+  const num = (v: number | undefined) => (v === undefined || v === null ? "" : String(v));
+  let s = `zyll-keybundle-mac/v1\n${f.vaultId}\n${revOf(f)}\n`;
+  for (const slot of f.slots) {
+    const k = slot.kdf;
+    for (const x of [slot.type, k.alg, num(k.v), num(k.m), num(k.t), num(k.p), k.salt, slot.nonce, slot.wrappedMk]) s += x + "\n";
+  }
+  return utf8(s);
+}
+
+async function macOf(f: KeyBundleFile, wrapKeyBytes: Uint8Array): Promise<Uint8Array> {
+  const raw = await hkdfSha256(wrapKeyBytes, new Uint8Array(0), utf8("zyll/v1/keybundle-mac"), 32);
+  const key = await subtle().importKey("raw", new Uint8Array(raw), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  raw.fill(0);
+  return new Uint8Array(await subtle().sign("HMAC", key, new Uint8Array(macInput(f))));
+}
+
+/** 附上 mac。[wrapKeyBytes] 是 K_wrap 的原始字节（只在 Worker 里、手里有 MK 时才有）。 */
+export async function sign(f: KeyBundleFile, wrapKeyBytes: Uint8Array): Promise<KeyBundleFile> {
+  return { ...f, mac: toBase64(await macOf({ ...f, mac: undefined }, wrapKeyBytes)) };
+}
+
+/** mac 对得上 [wrapKeyBytes]。没有 mac 的旧密钥包返回 false。 */
+export async function verify(f: KeyBundleFile, wrapKeyBytes: Uint8Array): Promise<boolean> {
+  if (!f.mac) return false;
+  let got: Uint8Array;
+  try {
+    got = fromBase64(f.mac);
+  } catch {
+    return false;
+  }
+  return bytesEqual(got, await macOf(f, wrapKeyBytes));
+}
+
+/**
+ * 从 MK 派生核对 mac 用的 HMAC 密钥（不可导出，只能验证）。解锁时和 K_wrap 一起派生，
+ * 之后主线程不用 MK 也能判断网盘上的密钥包是不是有这套密钥的设备写的。
+ */
+export async function macKeyFromMasterKey(mk: Uint8Array): Promise<CryptoKey> {
+  const wrap = await deriveWrapKeyBytes(mk);
+  const raw = await hkdfSha256(wrap, new Uint8Array(0), utf8("zyll/v1/keybundle-mac"), 32);
+  wrap.fill(0);
+  const key = await subtle().importKey("raw", new Uint8Array(raw), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  raw.fill(0);
+  return key;
+}
+
+/** 用 [macKeyFromMasterKey] 的密钥核对 mac。没有 mac 的旧密钥包返回 false。 */
+export async function verifyWithKey(f: KeyBundleFile, macKey: CryptoKey): Promise<boolean> {
+  if (!f.mac) return false;
+  let got: Uint8Array;
+  try {
+    got = fromBase64(f.mac);
+  } catch {
+    return false;
+  }
+  return subtle().verify("HMAC", macKey, new Uint8Array(got), new Uint8Array(macInput(f)));
+}
+
+/**
+ * 重新包裹主密钥：[newPassword] 不为空时换掉 password 槽位，[newRecoveryKey] 不为空时换掉 recovery 槽位，其余原样保留。
+ * MK 不变，已上传的照片都不用重新加密。rev 取“现在”和 max(旧 rev, [minRev]) + 1 里较大的那个，再附上 mac。
+ * 返回新的密钥包 JSON。只在 Worker 里调用（要用 MK 原始字节）。
+ */
+export async function rewrap(
+  text: string, masterKey: Uint8Array, opts: { newPassword?: string; newRecoveryKey?: Uint8Array; minRev?: number; params?: Argon2Params; now?: number },
+): Promise<string> {
+  const f = parse(text);
+  let slots = f.slots;
+  const put = (s: KeySlot) => (slots.some((x) => x.type === s.type) ? slots.map((x) => (x.type === s.type ? s : x)) : [...slots, s]);
+  if (opts.newPassword !== undefined) slots = put(await passwordSlot(f.vaultId, masterKey, opts.newPassword, opts.params ?? DEFAULT_ARGON2, randomBytes(16), randomBytes(12)));
+  if (opts.newRecoveryKey) slots = put(await recoverySlot(f.vaultId, masterKey, opts.newRecoveryKey, randomBytes(16), randomBytes(12)));
+  const rev = Math.max(opts.now ?? Date.now(), Math.max(revOf(f), opts.minRev ?? 0) + 1);
+  const wrapKey = await deriveWrapKeyBytes(masterKey);
+  try {
+    return JSON.stringify(await sign({ ...f, slots, rev, mac: undefined }, wrapKey), null, 2);
+  } finally {
+    wrapKey.fill(0);
+  }
 }

@@ -103,7 +103,7 @@
     view === "albums" && album !== null ? album : { photos: t("照片"), albums: t("相簿"), videos: t("视频"), shared: t("共享"), settings: t("设置") }[view],
   );
   const loading = $derived(library.accounts.some((a) => a.state === "loading"));
-  const problems = $derived(library.accounts.filter((a) => a.state === "signin" || a.state === "error" || a.readOnly || a.migrating || a.lostUploads.length));
+  const problems = $derived(library.accounts.filter((a) => a.state === "signin" || a.state === "error" || a.readOnly || a.migrating || a.lostUploads.length || a.wipedNotice));
 
   function go(v: View) {
     view = v;
@@ -198,13 +198,13 @@
   }
   $effect(() => {
     const timer = setInterval(() => {
-      if (library.unlocked && autoLock > 0 && !uploads.running && Date.now() - lastActive > autoLock * 60_000) lockNow();
+      if (library.unlocked && autoLock > 0 && !uploads.running && !library.newKeyPending && Date.now() - lastActive > autoLock * 60_000) lockNow();
     }, 30_000);
     return () => clearInterval(timer);
   });
 
   function beforeUnload(e: BeforeUnloadEvent) {
-    if (uploads.running) e.preventDefault();
+    if (uploads.running || library.newKeyPending) e.preventDefault();
   }
 </script>
 
@@ -271,8 +271,9 @@
           <div class="notice">
             <Icon name="warn" />
             <span class="grow">
-              {a.label}：{a.state === "signin" ? t("登录已过期") : a.state === "error" ? a.error : a.readOnly || (a.migrating ? t("手机正在搬迁存储位置，暂时不能在这里上传或删除照片") : t("这些照片在手机搬迁存储位置时丢了，请重新上传：{names}", { names: a.lostUploads.join(", ") }))}
+              {a.label}：{a.state === "signin" ? t("登录已过期") : a.state === "error" ? a.error : a.readOnly || (a.migrating ? t("手机正在搬迁存储位置，暂时不能在这里上传或删除照片") : a.lostUploads.length ? t("这些照片在手机搬迁存储位置时丢了，请重新上传：{names}", { names: a.lostUploads.join(", ") }) : a.wipedDropped ? t("这个账号的备份在别的设备上全部删除过。这个浏览器里还有 {n} 项没写进网盘目录的上传和删除，已经作废，需要的话请重新上传。", { n: a.wipedDropped }) : t("这个账号的备份在别的设备上全部删除过。"))}
             </span>
+            {#if a.wipedNotice && !a.readOnly && a.state === "ready"}<button class="btn" onclick={() => (a.wipedNotice = false)}>{t("知道了")}</button>{/if}
             {#if a.state === "signin"}<button class="btn" onclick={() => library.reconnect(a).catch((e) => (toast = e.message))}>{t("重新连接")}</button>{/if}
             {#if a.state === "error"}<button class="btn" onclick={() => a.load()}>{t("重试")}</button>{/if}
             {#if a.rolledBack}<button class="btn" onclick={() => go("settings")}>{t("去处理")}</button>{/if}
