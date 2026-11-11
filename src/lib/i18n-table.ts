@@ -367,4 +367,12 @@ export const table: Record<string, { en: string; ja: string; "zh-Hant": string }
   "由 Zyll 相册分享。照片端到端加密，只在你的浏览器里解密。": { en: "Shared with Zyll Photos. Photos are end-to-end encrypted and decrypted only in your browser.", ja: "Zyll フォトで共有。写真はエンドツーエンドで暗号化され、あなたのブラウザ内でのみ復号されます。", "zh-Hant": "由 Zyll 相簿分享。相片端對端加密，只在你的瀏覽器裡解密。" },
   "下载原图": { en: "Download original", ja: "元の画像をダウンロード", "zh-Hant": "下載原圖" },
   "正在加载…": { en: "Loading…", ja: "読み込み中…", "zh-Hant": "正在載入…" },
+  "正在加载… {pct}%": { en: "Loading… {pct}%", ja: "読み込み中… {pct}%", "zh-Hant": "正在載入… {pct}%" },
+  "暂时打不开，请稍后再试": { en: "Can't open it right now. Please try again later.", ja: "今は開けません。しばらくしてからもう一度お試しください。", "zh-Hant": "暫時打不開，請稍後再試" },
+  "显示密码": { en: "Show password", ja: "パスワードを表示", "zh-Hant": "顯示密碼" },
+  "隐藏密码": { en: "Hide password", ja: "パスワードを隠す", "zh-Hant": "隱藏密碼" },
+  "下载失败，请稍后再试": { en: "Download failed. Please try again later.", ja: "ダウンロードできませんでした。しばらくしてからもう一度お試しください。", "zh-Hant": "下載失敗，請稍後再試" },
+  "这个文件有 {size}，在手机浏览器里可能打不开，建议在电脑上查看。": { en: "This file is {size} and may not open in a phone browser. It's best viewed on a computer.", ja: "このファイルは {size} あり、スマホのブラウザでは開けないことがあります。パソコンで見ることをおすすめします。", "zh-Hant": "這個檔案有 {size}，在手機瀏覽器裡可能打不開，建議在電腦上查看。" },
+  "仍然打开": { en: "Open anyway", ja: "それでも開く", "zh-Hant": "仍然開啟" },
+  "请直接在浏览器里打开这个链接。": { en: "Please open this link directly in your browser.", ja: "このリンクはブラウザで直接開いてください。", "zh-Hant": "請直接在瀏覽器裡開啟這個連結。" },
 };
