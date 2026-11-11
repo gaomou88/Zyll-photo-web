@@ -19,8 +19,11 @@ export class FetchError extends Error {
   }
 }
 
-/** Google 返回这些原因时表示文件本身打不开了（不再公开、没有权限）。 */
-const GONE_REASONS = new Set(["notFound", "forbidden", "insufficientFilePermissions", "appNotAuthorizedToFile", "accessDenied", "itemNotFound"]);
+/**
+ * 这些原因表示文件本身打不开了（不再公开、没有权限）。
+ * 不含 Google 的 "forbidden"：API key 被来源限制拦下（API_KEY_HTTP_REFERRER_BLOCKED）时也是它，那不是链接失效。
+ */
+const GONE_REASONS = new Set(["notFound", "insufficientFilePermissions", "appNotAuthorizedToFile", "cannotDownloadAbusiveFile", "accessDenied", "itemNotFound"]);
 
 async function errorOf(res: Response, p: sharelink.Provider): Promise<FetchError> {
   let reason = "";
