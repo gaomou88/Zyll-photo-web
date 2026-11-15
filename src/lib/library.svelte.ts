@@ -1,6 +1,7 @@
 import { BlobKind, keybundle, toHex, randomBytes } from "@zyll/crypto";
 import { NeedsSignIn, loadAccounts, removeAccount, signIn as authSignIn, type DriveKind, type StoredAccount } from "./auth";
-import { ENCRYPTED_FOLDER, INDEX_ENCRYPTED, INDEX_PLAIN, KEYBUNDLE_PATH, THUMB_FOLDER, VISIBLE_ROOT } from "./config";
+import { ENCRYPTED_FOLDER, INDEX_ENCRYPTED, INDEX_PLAIN, KEYBUNDLE_PATH, THUMB_FOLDER } from "./config";
+import { RESERVED, rootName } from "./layout";
 import { GoogleDrive, OneDrive, type Drive, type Quota } from "./drive";
 import { applyChange, mergeDocs, parseIndex, serializeIndex, type IndexChange, type IndexDoc, type IndexItem, type Merged } from "./indexdoc";
 import { isHeic, makeThumbnail, mimeOf, sha256Hex, takenAt } from "./media";
@@ -259,7 +260,7 @@ export class Account {
         const visibleDrive = new GoogleDrive(this.stored, id);
         // 以前用过的文件夹里可能留着旧标记（比如 moved → hidden），和 App 的 beginMove 一样先删掉
         this.drive = visibleDrive;
-        this.where = t("Google 网盘 · 我的云端硬盘/{folder}", { folder: VISIBLE_ROOT });
+        this.where = t("Google 网盘 · 我的云端硬盘/{folder}", { folder: rootName() });
         await this.assertEmpty();
         const old = await visibleDrive.findFile(["storage.json"]);
         if (old) await visibleDrive.delete(old);
@@ -454,7 +455,7 @@ export class Account {
     const at = (where: "hidden" | "visible") => {
       if (where === "visible" && visibleId) {
         this.drive = new GoogleDrive(this.stored, visibleId);
-        this.where = t("Google 网盘 · 我的云端硬盘/{folder}", { folder: VISIBLE_ROOT });
+        this.where = t("Google 网盘 · 我的云端硬盘/{folder}", { folder: rootName() });
       } else {
         this.drive = hidden;
         this.where = t("Google 网盘 · 隐藏区");
@@ -755,7 +756,9 @@ export class Account {
     await this.checkMarker();
     const safe = (s: string) => s.replace(/\//g, "_").trim();
     const src = encrypt ? await encryptingSource(f, BlobKind.Original, key!) : plainSource(f, mime);
-    const path = encrypt ? [ENCRYPTED_FOLDER, `${toHex(randomBytes(16))}.zylc`] : [safe(album) || "未命名", safe(f.name) || "photo"];
+    // 相簿名恰好是 vault、共享、.thumbs 时加个前缀（和 App 一致），免得被当成那些特殊文件夹（layout.ts）
+    const albumDir = safe(album) || "未命名";
+    const path = encrypt ? [ENCRYPTED_FOLDER, `${toHex(randomBytes(16))}.zylc`] : [RESERVED.has(albumDir) ? "_" + albumDir : albumDir, safe(f.name) || "photo"];
     const r = await this.drive.upload(path, src, { signal, onProgress: (n) => onProgress(t("上传"), n / src.size) });
     let th = "";
     if (thumb) {
@@ -768,7 +771,7 @@ export class Account {
         // 缩略图传失败不要紧：手机会自己补
       }
     }
-    const item: IndexItem = { r, e: encrypt, n: f.name, a: album, m: mime, t: when, s: f.size, h, th, d: deviceId, k: "", ...(mo ? { mo: true } : {}) };
+    const item: IndexItem = { r, e: encrypt, n: f.name, a: album, m: mime, t: when, s: f.size, h, th, d: deviceId, k: "", ...(mo ? { mo: true } : {}), u: Date.now() };
     this.setPending([...this.pending(), item]);
     return item;
   }

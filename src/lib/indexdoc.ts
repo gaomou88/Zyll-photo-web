@@ -43,6 +43,8 @@ export interface IndexItem {
    * 没有这个字段不代表不是动态照片（旧版本写的、或别的设备没识别），打开时还会按内容再找一次。
    */
   mo?: boolean;
+  /** 上传到网盘的时间（毫秒），“最近添加”按它排。旧版本写的没有。 */
+  u?: number;
 }
 
 export interface IndexDoc {
@@ -87,6 +89,7 @@ export function parseIndex(text: string): IndexDoc {
       r: str(i.r), e: i.e === true, n: str(i.n), a: str(i.a), m: str(i.m), t: num(i.t), s: num(i.s),
       h: str(i.h), th: str(i.th), d: str(i.d), k: str(i.k),
       ...(i.mo === true ? { mo: true } : {}),
+      ...(num(i.u) > 0 ? { u: Math.floor(num(i.u)) } : {}),
     } satisfies IndexItem;
   });
   const mv: IdMoves = new Map();
@@ -186,6 +189,7 @@ export function serializeIndex(m: Merged, seq: number, encrypt: boolean): string
     const o: Record<string, unknown> = { r: i.r, e: i.e, n: i.n, a: i.a, m: i.m, t: i.t, s: i.s, h: i.h, th: i.th, d: i.d };
     if (i.k) o.k = i.k;
     if (i.mo) o.mo = true;
+    if (i.u) o.u = i.u;
     return o;
   });
   const doc: Record<string, unknown> = {

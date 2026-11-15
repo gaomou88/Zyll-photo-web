@@ -3,6 +3,7 @@
   let { name, size = 22 }: { name: string; size?: number } = $props();
   const paths: Record<string, string> = {
     photos: "M4 5h16v14H4z M4 15l4.5-4.5 4 4 2.5-2.5L20 17 M15.5 9.5a1.5 1.5 0 1 0 0-.01",
+    recent: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M12 7.5V12l3 2",
     albums: "M7 4h11a2 2 0 0 1 2 2v11 M4 8h12v12H4z M4 17l3.5-3.5 3 3 2-2L16 18",
     video: "M3 6h13v12H3z M16 10l5-3v10l-5-3",
     shared: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M3 19c0-3 2.7-5 6-5s6 2 6 5 M16 5.5a3 3 0 0 1 0 5.5 M18 14.5c2 .6 3 2.2 3 4.5",

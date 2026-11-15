@@ -66,7 +66,7 @@ K_link = HKDF-SHA256(ikm = S || pw, salt = 空, info = UTF-8("zyll/v1/link-wrap"
 - `p`（可选）：这张照片在另一个账号里时写 `g` 或 `o`；不写就是清单所在的账号。一条链接可以同时带 Google 和 OneDrive 里的照片。
 - 一条链接最多 500 张。
 
-清单放在 `共享/links/<id>.zylc`（Google 在 “Zyll 相册/共享/links/”，OneDrive 在应用文件夹的 “共享/links/”）。
+清单放在 `共享/links/<id>.zylc`（Google 在 “Zyll 相册/共享/links/”，OneDrive 在应用文件夹的 “共享/links/”）。v3 起实际放在“共享/外链/”（名字按语言），见 vault-layout.md。
 
 ## 4. 公开与撤销
 

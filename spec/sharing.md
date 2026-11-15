@@ -78,6 +78,7 @@ ct         = AES-256-GCM(k, nonce, AK, aad)          # 32 + 16 字节
 
 ```
 Zyll 相册/共享/<albumId>/            # albumId：UUID v4；文件夹带 appProperties.zyllShared = albumId
+                                     # （v3 起“共享”文件夹名按语言，见 vault-layout.md；下文路径都是逻辑路径）
 ├─ album.json                        # 签名的相册清单（明文，只有公钥和封装后的钥匙）
 ├─ index.zylc                        # kind=3，用 K_album 加密的相册目录
 └─ adds/<成员 fpHex>-<seq>.zylc       # kind=4，“可添加”成员提交的新照片，等主人或管理者合并

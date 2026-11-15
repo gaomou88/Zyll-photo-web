@@ -1,5 +1,8 @@
 /* 自动整理的翻译表：key 是简体中文原文。改界面文字时同时改这里。 */
 export const table: Record<string, { en: string; ja: string; "zh-Hant": string }> = {
+  "最近添加": { en: "Recently added", ja: "最近追加した項目", "zh-Hant": "最近新增" },
+  "上传时间未知": { en: "Upload time unknown", ja: "アップロード日時不明", "zh-Hant": "上傳時間未知" },
+  "{day} 上传": { en: "Uploaded {day}", ja: "{day}にアップロード", "zh-Hant": "{day} 上傳" },
   "1 小时": { en: "1 hour", ja: "1 時間", "zh-Hant": "1 小時" },
   "App 版": { en: "App", ja: "アプリ版", "zh-Hant": "App 版" },
   "App 还在开发测试中，很快开放下载。": { en: "The app is in testing and will be available soon.", ja: "アプリは現在テスト中で、まもなく公開予定です。", "zh-Hant": "App 還在開發測試中，很快開放下載。" },

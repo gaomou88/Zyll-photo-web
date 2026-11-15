@@ -1,6 +1,7 @@
 import { NeedsSignIn, accessToken, invalidate, type StoredAccount } from "./auth";
-import { SIMPLE_UPLOAD_MAX, SLICE, VISIBLE_ROOT } from "./config";
+import { SIMPLE_UPLOAD_MAX, SLICE } from "./config";
 import { t } from "./i18n";
+import { DIR_PROP, LEGACY, candidates, legacyPlaces, nameOf, parentOf, place, placeDir, rootDescription, rootName, type DriveDir, type Place } from "./layout";
 
 /** 要上传的内容：按需读出一段字节（加密文件边读边加密，不整个放进内存）。 */
 export interface UploadSource {
@@ -27,7 +28,10 @@ export interface MediaRequest {
   headers: Record<string, string>;
 }
 
-/** 一个网盘的读写接口，路径和安卓 CloudDrive 一致（相对于库根目录）。 */
+/**
+ * 一个网盘的读写接口，路径和安卓 CloudDrive 一致（相对于库根目录）。
+ * 路径都是逻辑路径（v2 的写法），实际放在哪个文件夹由 layout.ts 决定（spec/vault-layout.md v3）。
+ */
 export interface Drive {
   readonly account: StoredAccount;
   findFile(path: string[]): Promise<string | null>;
@@ -167,6 +171,7 @@ const gq = (s: string) => s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
  */
 export class GoogleDrive implements Drive {
   private folders = new Map<string, string>();
+  private dirs = new Map<DriveDir, Promise<string>>();
   constructor(readonly account: StoredAccount, readonly root: string = "appDataFolder") {}
 
   private get spaces() {
@@ -179,10 +184,54 @@ export class GoogleDrive implements Drive {
     return o.files ?? [];
   }
 
-  private async folderId(path: string[], create: boolean): Promise<string | null> {
-    let parent = this.root;
-    let key = "";
-    for (const name of path) {
+  /**
+   * 顶层文件夹（设置、共享、相册、外链）的 id：按 zyllDir 标记找（几个时取最早建的）；没有时把 v2 的旧文件夹
+   * （vault、共享、links）改名、打标记认领过来；都没有就按界面语言新建。和安卓 GoogleDriveApi.dirId 一致。
+   */
+  private dirId(dir: DriveDir): Promise<string> {
+    let p = this.dirs.get(dir);
+    if (!p) {
+      p = this.resolveDir(dir);
+      this.dirs.set(dir, p);
+      p.catch(() => this.dirs.delete(dir));
+    }
+    return p;
+  }
+
+  private async resolveDir(dir: DriveDir): Promise<string> {
+    const up = parentOf(dir);
+    const parent = up ? await this.dirId(up) : this.root;
+    const tagged = await this.list(
+      `'${parent}' in parents and mimeType = '${G_FOLDER}' and trashed = false and appProperties has { key='${DIR_PROP}' and value='${dir}' }`,
+      "files(id)", "&orderBy=createdTime",
+    );
+    if (tagged[0]) return tagged[0].id;
+    const legacy = LEGACY[dir];
+    if (legacy) {
+      const found = await this.list(`name = '${gq(legacy)}' and mimeType = '${G_FOLDER}' and '${parent}' in parents and trashed = false`, "files(id,appProperties)", "&orderBy=createdTime");
+      const pick = found.find((f) => !(f.appProperties as Record<string, string> | undefined)?.[DIR_PROP]);
+      if (pick) {
+        await request(this.account, `${G_API}/files/${pick.id}?fields=id`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: nameOf(dir), appProperties: { [DIR_PROP]: dir } }),
+        });
+        return pick.id;
+      }
+    }
+    const r = await request(this.account, `${G_API}/files?fields=id`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nameOf(dir), mimeType: G_FOLDER, parents: [parent], appProperties: { [DIR_PROP]: dir } }),
+    });
+    return (await r.json()).id as string;
+  }
+
+  /** 实际位置里的文件夹：从顶层文件夹（或根）起按 [dirs] 一层层找，[create] 时没有就建。 */
+  private async physical(p: Place, dirs: string[], create: boolean): Promise<string | null> {
+    let parent = p.dir ? await this.dirId(p.dir) : this.root;
+    let key = "@" + (p.dir ?? "");
+    for (const name of dirs) {
       key += "/" + name;
       const cached = this.folders.get(key);
       if (cached) {
@@ -206,14 +255,33 @@ export class GoogleDrive implements Drive {
     return parent;
   }
 
+  /** 逻辑路径 [file] 所在的实际文件夹。 */
+  private parentOfFile(file: string[], create: boolean) {
+    const p = place(file);
+    return this.physical(p, p.rest.slice(0, -1), create);
+  }
+
+  private async lookup(p: Place): Promise<string | null> {
+    const parent = await this.physical(p, p.rest.slice(0, -1), false);
+    return parent ? this.findIn(parent, p.rest[p.rest.length - 1]!) : null;
+  }
+
   private async findIn(parent: string, name: string): Promise<string | null> {
     const found = await this.list(`name = '${gq(name)}' and '${parent}' in parents and trashed = false`, "files(id)", "&orderBy=modifiedTime%20desc");
     return found[0]?.id ?? null;
   }
 
+  /** 先找新位置，再找旧位置（升级还没整理完、旧版 App 又写回了旧位置）。 */
   async findFile(path: string[]): Promise<string | null> {
-    const parent = await this.folderId(path.slice(0, -1), false);
-    return parent ? this.findIn(parent, path[path.length - 1]!) : null;
+    const p = place(path);
+    const hit = await this.lookup(p);
+    if (hit) return hit;
+    for (const lp of legacyPlaces(path)) {
+      const h = await this.lookup(lp);
+      if (h) return h;
+    }
+    if (p.dir && p.dir !== "settings") return this.lookup({ dir: null, rest: path });
+    return null;
   }
 
   async download(id: string, range?: [number, number], signal?: AbortSignal): Promise<Uint8Array> {
@@ -227,7 +295,7 @@ export class GoogleDrive implements Drive {
   }
 
   async upload(path: string[], src: UploadSource, opts: UploadOptions = {}): Promise<string> {
-    const parent = (await this.folderId(path.slice(0, -1), true))!;
+    const parent = (await this.parentOfFile(path, true))!;
     const name = path[path.length - 1]!;
     const existing = opts.replace ? await this.findIn(parent, name) : null;
     const meta = existing ? {} : { name, parents: [parent] };
@@ -288,7 +356,7 @@ export class GoogleDrive implements Drive {
 
   async copy(id: string, path: string[]): Promise<string> {
     checkId(id);
-    const parent = (await this.folderId(path.slice(0, -1), true))!;
+    const parent = (await this.parentOfFile(path, true))!;
     const r = await request(this.account, `${G_API}/files/${id}/copy?fields=id`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -306,7 +374,8 @@ export class GoogleDrive implements Drive {
   // ---------- 共享相册（spec/sharing.md） ----------
 
   async ensureFolder(path: string[]): Promise<string> {
-    return (await this.folderId(path, true))!;
+    const p = placeDir(path);
+    return (await this.physical(p, p.rest, true))!;
   }
 
   async head(id: string, n: number): Promise<Uint8Array> {
@@ -379,9 +448,9 @@ export class GoogleDrive implements Drive {
 
   /** My Drive 下带 appProperties.zyllRoot = "1" 的“Zyll 相册/”文件夹（开了分享功能、搬过去的库）。 */
   static async findVisibleRoot(acc: StoredAccount): Promise<string | null> {
-    // 和 App 一致：名字是“Zyll 相册”、在根目录下、带 zyllRoot 标记
-    const q = `name = '${VISIBLE_ROOT}' and mimeType = '${G_FOLDER}' and 'root' in parents and trashed = false and appProperties has { key='zyllRoot' and value='1' }`;
-    const url = `${G_API}/files?spaces=drive&fields=files(id)&q=${encodeURIComponent(q)}`;
+    // 和 App 一致：在根目录下、带 zyllRoot 标记。不认名字（按语言会是“Zyll 相册”“Zyll Photos”…）
+    const q = `mimeType = '${G_FOLDER}' and 'root' in parents and trashed = false and appProperties has { key='zyllRoot' and value='1' }`;
+    const url = `${G_API}/files?spaces=drive&orderBy=createdTime&fields=files(id)&q=${encodeURIComponent(q)}`;
     const o = await (await request(acc, url)).json();
     return o.files?.[0]?.id ?? null;
   }
@@ -392,11 +461,11 @@ export class GoogleDrive implements Drive {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: VISIBLE_ROOT,
+        name: rootName(),
         mimeType: G_FOLDER,
         parents: ["root"],
         appProperties: { zyllRoot: "1" },
-        description: "Zyll 相册的加密备份。文件名是随机的，内容都是密文。请不要删除或移动这个文件夹。",
+        description: rootDescription(),
       }),
     });
     return (await r.json()).id;
@@ -412,12 +481,98 @@ const encPath = (path: string[]) => path.map(encodeURIComponent).join("/");
 export class OneDrive implements Drive {
   private downloadUrls = new Map<string, { url: string; at: number }>();
   private driveId: string | null = null;
+  private rootId: string | null = null;
+  private dirs = new Map<DriveDir, Promise<string>>();
   constructor(readonly account: StoredAccount) {}
 
-  async findFile(path: string[]): Promise<string | null> {
-    const r = await request(this.account, `${MS_API}/me/drive/special/approot:/${encPath(path)}?$select=id`, {}, (s) => (s >= 200 && s < 300) || s === 404);
+  private async approot(): Promise<string> {
+    if (!this.rootId) {
+      const o = await (await request(this.account, `${MS_API}/me/drive/special/approot?$select=id,parentReference`)).json();
+      this.driveId = o.parentReference?.driveId as string;
+      this.rootId = o.id as string;
+    }
+    return this.rootId!;
+  }
+
+  private async childFolders(id: string): Promise<{ id: string; name: string; at: number }[]> {
+    const out: { id: string; name: string; at: number }[] = [];
+    let url: string | undefined = `${MS_API}/me/drive/items/${id}/children?$select=id,name,folder,createdDateTime&$top=1000`;
+    while (url) {
+      const o: Record<string, any> = await (await request(this.account, url)).json();
+      for (const f of o.value ?? []) if (f.folder) out.push({ id: f.id, name: f.name, at: Date.parse(f.createdDateTime ?? "") || 0 });
+      url = o["@odata.nextLink"] || undefined;
+    }
+    return out;
+  }
+
+  /**
+   * 顶层文件夹（设置、共享、相册、外链）的 id：任何一种语言名字的（几个时取最早建的）；没有时把 v2 的旧文件夹
+   * （vault、links）改名认领过来；都没有就按界面语言新建。和安卓 OneDriveApi.dirId 一致。
+   */
+  private dirId(dir: DriveDir): Promise<string> {
+    let p = this.dirs.get(dir);
+    if (!p) {
+      p = this.resolveDir(dir);
+      this.dirs.set(dir, p);
+      p.catch(() => this.dirs.delete(dir));
+    }
+    return p;
+  }
+
+  private async resolveDir(dir: DriveDir): Promise<string> {
+    const up = parentOf(dir);
+    const parent = up ? await this.dirId(up) : await this.approot();
+    const names = candidates(dir);
+    const match = (kids: { id: string; name: string; at: number }[]) =>
+      kids.filter((k) => names.includes(k.name)).sort((a, b) => a.at - b.at)[0]?.id ?? null;
+    const kids = await this.childFolders(parent);
+    const hit = match(kids);
+    if (hit) return hit;
+    const legacy = LEGACY[dir];
+    const old = legacy ? kids.filter((k) => k.name === legacy).sort((a, b) => a.at - b.at)[0] : undefined;
+    if (old) {
+      await request(this.account, `${MS_API}/me/drive/items/${old.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: nameOf(dir) }),
+      });
+      return old.id;
+    }
+    const r = await request(this.account, `${MS_API}/me/drive/items/${parent}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nameOf(dir), folder: {}, "@microsoft.graph.conflictBehavior": "fail" }),
+    }, (s) => (s >= 200 && s < 300) || s === 409);
+    if (r.status !== 409) return (await r.json()).id as string;
+    // 别的设备刚好同时建了
+    const again = match(await this.childFolders(parent));
+    if (!again) throw new HttpError(409, "folder conflict");
+    return again;
+  }
+
+  /** 实际位置的地址（Graph 的“按 id 再接相对路径”写法）。 */
+  private async url(p: Place): Promise<string> {
+    const base = p.dir ? `${MS_API}/me/drive/items/${await this.dirId(p.dir)}` : `${MS_API}/me/drive/special/approot`;
+    return p.rest.length ? `${base}:/${encPath(p.rest)}` : base;
+  }
+
+  private async idAt(p: Place): Promise<string | null> {
+    const r = await request(this.account, `${await this.url(p)}?$select=id`, {}, (s) => (s >= 200 && s < 300) || s === 404);
     if (r.status === 404) return null;
     return (await r.json()).id;
+  }
+
+  /** 先找新位置，再找旧位置（升级还没整理完、旧版 App 又写回了旧位置）。 */
+  async findFile(path: string[]): Promise<string | null> {
+    const p = place(path);
+    const hit = await this.idAt(p);
+    if (hit) return hit;
+    for (const lp of legacyPlaces(path)) {
+      const h = await this.idAt(lp);
+      if (h) return h;
+    }
+    if (p.dir && p.dir !== "settings") return this.idAt({ dir: null, rest: path });
+    return null;
   }
 
   /**
@@ -463,7 +618,7 @@ export class OneDrive implements Drive {
     const conflict = opts.replace ? "replace" : "rename";
     if (src.size <= SIMPLE_UPLOAD_MAX) {
       const data = await src.read(0, src.size);
-      const r = await request(this.account, `${MS_API}/me/drive/special/approot:/${encPath(path)}:/content?@microsoft.graph.conflictBehavior=${conflict}`, {
+      const r = await request(this.account, `${await this.url(place(path))}:/content?@microsoft.graph.conflictBehavior=${conflict}`, {
         method: "PUT",
         headers: { "Content-Type": src.mime },
         body: data as Uint8Array<ArrayBuffer>,
@@ -472,7 +627,7 @@ export class OneDrive implements Drive {
       opts.onProgress?.(src.size);
       return (await r.json()).id;
     }
-    const s = await request(this.account, `${MS_API}/me/drive/special/approot:/${encPath(path)}:/createUploadSession`, {
+    const s = await request(this.account, `${await this.url(place(path))}:/createUploadSession`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ item: { "@microsoft.graph.conflictBehavior": conflict } }),
@@ -506,22 +661,31 @@ export class OneDrive implements Drive {
     return r.status !== 404;
   }
 
+  /** 逻辑上的文件夹 [path] 对应的实际文件夹，没有就建。 */
   private async ensureFolderRef(path: string[]): Promise<{ id: string; driveId: string }> {
-    if (!this.driveId) {
-      const o = await (await request(this.account, `${MS_API}/me/drive/special/approot?$select=id,parentReference`)).json();
-      this.driveId = o.parentReference?.driveId as string;
-      if (path.length === 0) return { id: o.id, driveId: this.driveId };
+    const root = await this.approot();
+    const p = placeDir(path);
+    let id = p.dir ? await this.dirId(p.dir) : root;
+    for (const name of p.rest) {
+      const r = await request(this.account, `${MS_API}/me/drive/items/${id}:/${encodeURIComponent(name)}?$select=id`, {}, (s) => (s >= 200 && s < 300) || s === 404);
+      if (r.status !== 404) {
+        id = (await r.json()).id;
+        continue;
+      }
+      const c = await request(this.account, `${MS_API}/me/drive/items/${id}/children`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, folder: {}, "@microsoft.graph.conflictBehavior": "fail" }),
+      }, (s) => (s >= 200 && s < 300) || s === 409);
+      if (c.status === 409) {
+        // 别的设备刚好同时建了：再找一次
+        const again = await request(this.account, `${MS_API}/me/drive/items/${id}:/${encodeURIComponent(name)}?$select=id`);
+        id = (await again.json()).id;
+      } else {
+        id = (await c.json()).id;
+      }
     }
-    const sel = path.length ? `:/${encPath(path)}` : "";
-    const r = await request(this.account, `${MS_API}/me/drive/special/approot${sel}?$select=id`, {}, (s) => (s >= 200 && s < 300) || s === 404);
-    if (r.status !== 404) return { id: (await r.json()).id, driveId: this.driveId };
-    const parent = await this.ensureFolderRef(path.slice(0, -1));
-    const c = await request(this.account, `${MS_API}/me/drive/items/${parent.id}/children`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: path[path.length - 1], folder: {}, "@microsoft.graph.conflictBehavior": "replace" }),
-    });
-    return { id: (await c.json()).id, driveId: this.driveId };
+    return { id, driveId: this.driveId! };
   }
 
   async copy(id: string, path: string[]): Promise<string> {

@@ -5,23 +5,29 @@
   import type { Photo } from "../lib/library.svelte";
   import { t } from "../lib/i18n";
 
-  let { photos, selected, onopen, ontoggle, ontoggleday, empty = t("这里还没有照片") }: {
+  let { photos, selected, onopen, ontoggle, ontoggleday, empty = t("这里还没有照片"), timeOf }: {
     photos: Photo[];
     selected: Set<string>;
     onopen: (index: number) => void;
     ontoggle: (index: number, shift: boolean) => void;
     ontoggleday: (keys: string[]) => void;
     empty?: string;
+    /** 按哪个时间分天（默认拍摄时间）。给了的话是“最近添加”：按上传时间分，null 表示不知道上传时间 */
+    timeOf?: (p: Photo) => number | null;
   } = $props();
 
   // 按天分组（照片已经按时间从新到旧排好）
   const groups = $derived.by(() => {
     const out: { key: string; label: string; start: number; items: Photo[] }[] = [];
     photos.forEach((p, i) => {
-      const k = dayKey(p.item.t);
+      const at = timeOf ? timeOf(p) : p.item.t;
+      const k = at === null ? "unknown" : dayKey(at);
       const last = out[out.length - 1];
       if (last && last.key === k) last.items.push(p);
-      else out.push({ key: k, label: dayLabel(p.item.t), start: i, items: [p] });
+      else {
+        const label = at === null ? t("上传时间未知") : timeOf ? t("{day} 上传", { day: dayLabel(at) }) : dayLabel(at);
+        out.push({ key: k, label, start: i, items: [p] });
+      }
     });
     return out;
   });

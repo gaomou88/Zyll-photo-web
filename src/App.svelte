@@ -21,8 +21,8 @@
   import { clearThumbs } from "./lib/thumbs";
   import { clearStreams, startServiceWorker } from "./lib/stream";
 
-  type View = "photos" | "albums" | "videos" | "shared" | "settings";
-  const VIEWS: View[] = ["photos", "albums", "videos", "shared", "settings"];
+  type View = "photos" | "recent" | "albums" | "videos" | "shared" | "settings";
+  const VIEWS: View[] = ["photos", "recent", "albums", "videos", "shared", "settings"];
 
   // 当前页面记在地址的 # 后面（#/settings、#/albums/相机）：刷新、下拉刷新后还停在原来的页面，返回键也能用
   function parseRoute(): { view: View; album: string | null } {
@@ -93,14 +93,19 @@
     if (uploads.needsUnlock) showUnlock = true;
   });
 
+  /** 上传到网盘的时间：同一张照片在几个账号里时取最近的一次；不知道（旧版本传的、还没补上）为 0。 */
+  const uploadedAt = (p: Photo) => p.copies.reduce((m, c) => Math.max(m, c.item.u ?? 0), p.item.u ?? 0);
+
   const list = $derived.by((): Photo[] => {
     const all = library.photos;
+    // 最近添加：网盘里的全部照片，按上传到网盘的时间从新到旧；不知道上传时间的排最后、按拍摄时间
+    if (view === "recent") return [...all].sort((a, b) => uploadedAt(b) - uploadedAt(a) || b.item.t - a.item.t);
     if (view === "videos") return all.filter((p) => p.item.m.startsWith("video/"));
     if (view === "albums" && album !== null) return all.filter((p) => (p.item.a || t("未命名")) === album);
     return all;
   });
   const title = $derived(
-    view === "albums" && album !== null ? album : { photos: t("照片"), albums: t("相簿"), videos: t("视频"), shared: t("共享"), settings: t("设置") }[view],
+    view === "albums" && album !== null ? album : { photos: t("照片"), recent: t("最近添加"), albums: t("相簿"), videos: t("视频"), shared: t("共享"), settings: t("设置") }[view],
   );
   const loading = $derived(library.accounts.some((a) => a.state === "loading"));
   const problems = $derived(library.accounts.filter((a) => a.state === "signin" || a.state === "error" || a.readOnly || a.migrating || a.lostUploads.length || a.wipedNotice));
@@ -225,6 +230,7 @@
       <div class="brand"><img class="mark" src="./icon-192.png" alt="" width="30" height="30" /> {t("Zyll 相册")}</div>
       <nav>
         <button class:active={view === "photos"} onclick={() => go("photos")}><Icon name="photos" /> {t("照片")}</button>
+        <button class:active={view === "recent"} onclick={() => go("recent")}><Icon name="recent" /> {t("最近添加")}</button>
         <button class:active={view === "albums"} onclick={() => go("albums")}><Icon name="albums" /> {t("相簿")}</button>
         <button class:active={view === "videos"} onclick={() => go("videos")}><Icon name="video" /> {t("视频")}</button>
         <button class:active={view === "shared"} onclick={() => go("shared")}><Icon name="shared" /> {t("共享")}</button>
@@ -296,6 +302,7 @@
             onopen={(i) => (viewerIndex = i)}
             ontoggle={toggle}
             ontoggleday={toggleDay}
+            timeOf={view === "recent" ? (p) => uploadedAt(p) || null : undefined}
             empty={loading ? t("正在读取网盘里的备份…") : view === "videos" ? t("还没有视频") : t("还没有照片。点右上角“上传”，或把照片拖进这个窗口。")}
           />
         {/if}
