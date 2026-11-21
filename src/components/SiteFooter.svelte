@@ -4,17 +4,17 @@
   let { compact = false }: { compact?: boolean } = $props();
   const repos = [
     { name: "Zyll-photo-web", label: () => t("网页版"), url: "https://github.com/gaomou88/Zyll-photo-web" },
-    { name: "Zyll-photo", label: () => t("App 版"), url: "https://github.com/gaomou88/Zyll-photo" },
+    { name: "Zyll-photo", label: () => t("App 加密核心"), url: "https://github.com/gaomou88/Zyll-photo" },
   ];
 </script>
 
 <footer class:compact>
   <div class="oss">
-    <span class="title">{t("开源代码")}</span>
+    <span class="title">{t("公开源码")}</span>
     {#each repos as r}
       <a href={r.url} target="_blank" rel="noopener"><span>{r.label()}</span><span class="repo">{r.name}</span></a>
     {/each}
-    <span class="license">{t("基于 {license} 协议开源", { license: "GPL-3.0" })}</span>
+    <span class="license">{t("网页版基于 {license} 协议开源", { license: "GPL-3.0" })}</span>
   </div>
   <div class="legal">
     <a href={legalPage("privacy")} target="_blank" rel="noopener">{t("隐私政策")}</a>
