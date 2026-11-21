@@ -4,7 +4,7 @@
   let { compact = false }: { compact?: boolean } = $props();
   const repos = [
     { name: "Zyll-photo-web", label: () => t("网页版"), url: "https://github.com/gaomou88/Zyll-photo-web" },
-    { name: "Zyll-photo", label: () => t("App 加密核心（供审计）"), url: "https://github.com/gaomou88/Zyll-photo" },
+    { name: "Zyll-photo", label: () => t("App 加密核心"), url: "https://github.com/gaomou88/Zyll-photo" },
   ];
 </script>
 

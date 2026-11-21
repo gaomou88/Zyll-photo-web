@@ -4,7 +4,7 @@ export const table: Record<string, { en: string; ja: string; "zh-Hant": string }
   "上传时间未知": { en: "Upload time unknown", ja: "アップロード日時不明", "zh-Hant": "上傳時間未知" },
   "{day} 上传": { en: "Uploaded {day}", ja: "{day}にアップロード", "zh-Hant": "{day} 上傳" },
   "1 小时": { en: "1 hour", ja: "1 時間", "zh-Hant": "1 小時" },
-  "App 加密核心（供审计）": { en: "App encryption core (for audit)", ja: "アプリの暗号化コア（監査用）", "zh-Hant": "App 加密核心（供審計）" },
+  "App 加密核心": { en: "App encryption core", ja: "アプリの暗号化コア", "zh-Hant": "App 加密核心" },
   "App 还在开发测试中，很快开放下载。": { en: "The app is in testing and will be available soon.", ja: "アプリは現在テスト中で、まもなく公開予定です。", "zh-Hant": "App 還在開發測試中，很快開放下載。" },
   "Google 没有返回访问令牌": { en: "Google did not return an access token", ja: "Google からアクセストークンが返されませんでした", "zh-Hant": "Google 沒有返回訪問令牌" },
   "Google 登录失败：{msg}": { en: "Google sign-in failed: {msg}", ja: "Google へのログインに失敗しました：{msg}", "zh-Hant": "Google 登入失敗：{msg}" },
